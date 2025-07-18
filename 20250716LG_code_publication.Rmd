@@ -1,0 +1,2907 @@
+---
+title: "SARS-CoV-2 antibody responses in children exhibit higher FcR engagement and avidity than adults"
+author: Ludivine Grzelak, PhD
+---
+#Notes
+Hospital_no corresponds to the Participant_ID so can be repeated whil ID is the unique sample ID
+
+```{r Packages, include =F}
+lapply(c("readxl", "ggplot2", "dplyr", "xlsx", "writexl","factoextra", "FactoMineR", "missMDA", "tidyverse", "corrplot",   "itsadug", "vegan", "scales", "lmtest","Matrix","qgraph", "ggnewscale")),  library, character.only = TRUE)
+
+```
+```{r summary_proportions, include=FALSE}
+summary_proportions <- function(dataframe, output_file) {
+  donors_info<- dataframe%>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms) %>%
+  distinct() %>%
+  group_by(Group)%>%
+  summarise(number_kids = sum(Group == "Children", na.rm = TRUE), 
+            prop_kids=number_kids/n()*100, 
+            number_adults = sum(Group == "Adults", na.rm = TRUE),
+            prop_adults= number_adults/n()*100,
+            n_females = sum(Sex == "F", na.rm = TRUE), 
+            prop_F= n_females/n()*100, 
+            n_males = sum(Sex == "M", na.rm = TRUE), 
+            prop_M= n_males/n()*100, 
+            n_S = sum(Symptoms == "S", na.rm = TRUE), 
+            prop_S = n_S/n()*100, 
+            n_AS=sum(Symptoms == "AS", na.rm = TRUE), 
+            prop_AS = n_AS/n()*100)
+  times <- dataframe%>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms, Time) %>%
+    group_by(Group)%>%
+    summarise(
+            count_Time_less_14 = sum(Time <= 14, na.rm = TRUE),
+            prop_Time_less_14 = mean(Time <= 14, na.rm = TRUE)*100, 
+            count_time_above_15 = sum(Time >14, na.rm = TRUE), 
+            prop_Time_above_15 = mean(Time >14, na.rm = TRUE)*100)
+  donors_info <- cbind(donors_info, times)
+
+ # Total donors per group
+total_donors <- dataframe %>%
+  dplyr::select(Hospital_no, Group) %>%
+  distinct() %>%
+  group_by(Group) %>%
+  summarise(total_donors = n(), .groups = "drop")
+
+ # Timepoints per donor, then summarised per group
+longitudinal <- dataframe %>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms, Time) %>%
+  group_by(Hospital_no, Group) %>%
+  summarise(n_timepoints = n(), .groups = "drop") %>%
+  group_by(Group) %>%
+  summarise(
+    one_tp = sum(n_timepoints == 1),
+    two_tp = sum(n_timepoints == 2),
+    three_tp = sum(n_timepoints == 3),
+    four_tp = sum(n_timepoints == 4),
+    more_tp = sum(n_timepoints > 4),
+    .groups = "drop"
+  ) %>%
+  left_join(total_donors, by = "Group") %>%
+  mutate(
+    prop_1_tp = one_tp / total_donors * 100,
+    prop_2_tp = two_tp / total_donors * 100,
+    prop_3_tp = three_tp / total_donors * 100,
+    prop_4_tp = four_tp / total_donors * 100
+  )
+
+  # Get the names of numeric variables to summarize
+numeric_vars <- dataframe %>%
+  dplyr::select(where(is.numeric), -Age) %>%
+  colnames()
+
+# Calculate summary statistics per group
+numeric_summary <- dataframe %>%
+  group_by(Group) %>%
+  summarise(across(
+    all_of(numeric_vars),
+    list(
+      Min = ~min(.x, na.rm = TRUE),
+      Q1 = ~quantile(.x, 0.25, na.rm = TRUE),
+      Median = ~median(.x, na.rm = TRUE),
+      Q3 = ~quantile(.x, 0.75, na.rm = TRUE),
+      Max = ~max(.x, na.rm = TRUE),
+      Mean = ~mean(.x, na.rm = TRUE),
+      SD = ~sd(.x, na.rm = TRUE),
+      `NA` = ~sum(is.na(.x))
+    ),
+    .names = "{.col}-{.fn}"
+  )) %>%
+  
+  pivot_longer(-Group, names_to = c("Variable", "Statistic"), names_sep = "-")%>%
+  pivot_wider(names_from = Variable, values_from = value) 
+
+  
+  age <- df %>% group_by(Group) %>%
+  summarise(across(
+    all_of("Age"),
+    list(
+      Min = ~min(.x, na.rm = TRUE),
+      Q1 = ~quantile(.x, 0.25, na.rm = TRUE),
+      Median = ~median(.x, na.rm = TRUE),
+      Q3 = ~quantile(.x, 0.75, na.rm = TRUE),
+      Max = ~max(.x, na.rm = TRUE),
+      Mean = ~mean(.x, na.rm = TRUE),
+      SD = ~sd(.x, na.rm = TRUE),
+      `NA` = ~sum(is.na(.x))
+    ),
+    .names = "{.col}-{.fn}"
+  )) %>%
+  
+  pivot_longer(-Group, names_to = c("Variable", "Statistic"), names_sep = "-")%>%
+  pivot_wider(names_from = Variable, values_from = value)
+  
+  numeric_summary <- left_join(age, numeric_summary)
+  
+  stats_timepoints_less_14 <- dataframe %>%
+    filter (Time<=14)%>%
+    group_by(Group) %>%
+  summarise(across(
+    all_of("Time"),
+    list(
+      Min = ~min(.x, na.rm = TRUE),
+      Q1 = ~quantile(.x, 0.25, na.rm = TRUE),
+      Median = ~median(.x, na.rm = TRUE),
+      Q3 = ~quantile(.x, 0.75, na.rm = TRUE),
+      Max = ~max(.x, na.rm = TRUE),
+      Mean = ~mean(.x, na.rm = TRUE),
+      SD = ~sd(.x, na.rm = TRUE),
+      `NA` = ~sum(is.na(.x))
+    ),
+    .names = "{.col}-{.fn}"
+  )) %>%
+  
+  pivot_longer(-Group, names_to = c("Variable", "Statistic"), names_sep = "-")%>%
+  pivot_wider(names_from = Variable, values_from = value) %>% 
+    rename(Time_under_14=Time)
+  
+stats_timepoints_more_15 <- dataframe %>%
+    filter (Time>14)%>%
+    group_by(Group) %>%
+  summarise(across(
+    all_of("Time"),
+    list(
+      Min = ~min(.x, na.rm = TRUE),
+      Q1 = ~quantile(.x, 0.25, na.rm = TRUE),
+      Median = ~median(.x, na.rm = TRUE),
+      Q3 = ~quantile(.x, 0.75, na.rm = TRUE),
+      Max = ~max(.x, na.rm = TRUE),
+      Mean = ~mean(.x, na.rm = TRUE),
+      SD = ~sd(.x, na.rm = TRUE),
+      `NA` = ~sum(is.na(.x))
+    ),
+    .names = "{.col}-{.fn}"
+  )) %>%
+  
+  pivot_longer(-Group, names_to = c("Variable", "Statistic"), names_sep = "-")%>%
+  pivot_wider(names_from = Variable, values_from = value) %>% 
+    rename(Time_more_15=Time)
+  
+     
+  numeric_summary<- left_join(numeric_summary,stats_timepoints_less_14)
+  numeric_summary <- left_join(numeric_summary,stats_timepoints_more_15)
+  numeric_summary <-numeric_summary%>% dplyr::select(Group,Statistic, Age, Time, Time_under_14, Time_more_15, everything())
+
+    # Create a list to write to Excel
+  write_data <- list(
+    "Proportions" = donors_info,
+    "Longitudinal"= longitudinal,
+    "Numeric Summary" = numeric_summary
+  )
+ 
+  # Save to Excel
+  write_xlsx(write_data, path = output_file)
+}
+```
+
+
+```{r initiation, include=F, echo=FALSE}
+
+#data_with_neg <- upload of the database with negative samples
+neg <- data_with_neg %>% filter (Group=="Neg Adults"|Group=="Neg Children")
+data<- data_with_neg[data_with_neg$Group=="Children"|data_with_neg$Group=="Adults",] # Get only the SARS-CoV-2+ participants
+
+#Format the table
+i<- c(5, 7:34)
+data[,i]<- apply(data[,i],2,function(x) as.numeric(x))
+data$Sex= as.factor(data$Sex)
+data$Group= as.factor(data$Group)
+data$Hospital_no <- as.factor(data$Hospital_no)
+data$Symptoms= as.factor(data$Symptoms)
+
+#Select the subset of samples for multivariate analysis that had most measurements done
+data_subset<- data[complete.cases(data[ , 15]),]
+
+#Get separate dataframes
+kids<- data[data$Group=="Children",]
+adults<- data[data$Group=="Adults",]
+
+kids_subset<- data_subset[data_subset$Group=="Children",]
+adults_subset<- data_subset[data_subset$Group=="Adults",]
+```
+
+
+# Details about the samples selected for Table 1 and Supplementary Table 1
+```{r Informations_cohorts, include =F, eval=F}
+  
+  databases <-  list(data = data,data_subset= data_subset, kids=kids, adults=adults, kids_subset=kids_subset, adults_subset=adults_subset)
+  donors_info <- list()
+
+  
+  for (i in 1:6) {
+  name_i <- names(databases)[i]
+  donors_info[[name_i]]<- databases[[i]]%>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms) %>%
+  distinct() %>%
+  summarise(
+          number_kids = sum(Group == "Children", na.rm = TRUE), 
+            prop_kids=number_kids/n()*100, 
+            number_adults = sum(Group == "Adults", na.rm = TRUE),
+            prop_adults= number_adults/n()*100,
+            n_females = sum(Sex == "F", na.rm = TRUE), 
+            prop_F= n_females/n()*100, 
+            n_males = sum(Sex == "M", na.rm = TRUE), 
+            prop_M= n_males/n()*100, 
+            n_S = sum(Symptoms == "S", na.rm = TRUE), 
+            prop_S = n_S/n()*100, 
+            n_AS=sum(Symptoms == "AS", na.rm = TRUE), 
+            prop_AS = n_AS/n()*100)
+  times <- databases[[i]]%>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms, Time) %>%
+    summarise(
+            count_Time_less_14 = sum(Time <= 14, na.rm = TRUE),
+            prop_Time_less_14 = mean(Time <= 14, na.rm = TRUE)*100, 
+            count_time_above_15 = sum(Time >14, na.rm = TRUE), 
+            prop_Time_above_15 = mean(Time >14, na.rm = TRUE)*100)
+  donors_info[[name_i]] <- cbind(donors_info[[name_i]], times)
+  }
+  all_donors_info <- data.frame()
+  for (i in 1:6){
+    all_donors_info <- bind_rows(all_donors_info,donors_info[[i]] )
+  }
+  rownames(all_donors_info) <- names(donors_info)
+
+longitudinal <- list()
+  for (i in 1:6) {
+  name_i <- names(databases)[i]
+  total_donors <-  databases[[i]]%>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms) %>%summarise(n=n_distinct(Hospital_no))%>%
+  pull(n)
+  total_timepoints <- databases[[i]] %>%
+  count(ID) %>%
+  summarise(total_timepoints = sum(n))
+  
+  longitudinal[[name_i]]<- databases[[i]]%>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms, Time) %>%
+  group_by(Hospital_no) %>%
+    summarise(n_timepoints = n(), .groups = "drop") %>%
+    summarise(total_timepoints,
+              one_tp= sum(n_timepoints==1), 
+              prop_1_tp = one_tp/total_donors*100,
+              two_tp= sum(n_timepoints==2), 
+              prop_2_tp = two_tp/total_donors*100,
+              three_tp = sum(n_timepoints ==3), 
+              prop_3_tp = three_tp/total_donors*100,
+              four_tp = sum(n_timepoints ==4), 
+              prop_4_tp = four_tp/total_donors*100,
+              more_tp =sum(n_timepoints >4) )
+     }
+
+  longitudinal_all <- data.frame()
+  for (i in 1:6){
+    longitudinal_all <- bind_rows(longitudinal_all,longitudinal[[i]] )
+  }
+  rownames(longitudinal_all) <- names(longitudinal)
+  #write.xlsx(all_donors_info, "20250514LG_infos_donors.xlsx", sheetName= "demographic")
+  #write.xlsx(longitudinal_all, "20250514LG_infos_donors.xlsx",append=TRUE,  sheetName= "longitudinal")
+  
+
+# Summary of numeric variables
+  numeric <- list()
+  for (i in 1:6){
+  name_i <- names(databases)[i]
+  numeric[[name_i]]<-databases[[i]] %>%
+  dplyr::select(where(is.numeric), -Age) %>%
+  reframe(
+    Min = sapply(., min, na.rm = TRUE),
+    Q1 = sapply(., quantile, probs = 0.25, na.rm = TRUE),
+    Median = sapply(., median, na.rm = TRUE),
+    Q3 = sapply(., quantile, probs = 0.75, na.rm = TRUE),
+    Max = sapply(., max, na.rm = TRUE),
+    Mean = sapply(., mean, na.rm = TRUE),
+    sd = sapply(., sd, na.rm = TRUE), 
+    `NA`= sapply(., function(x) sum(is.na(x)))
+  )%>%
+  t() %>%                                # Transpose so stats are rows
+  as.data.frame() %>%
+  `colnames<-`(names(databases[[i]] %>% dplyr::select(where(is.numeric), -Age))) %>%
+  tibble::rownames_to_column("Statistic") 
+  
+  #To get the age of unique donors 
+  age <- databases[[i]] %>%
+  dplyr::select(Hospital_no, Group, Sex, Age, Symptoms) %>%
+  distinct() %>%
+  dplyr::select(Age) %>%
+  reframe(
+    Min = sapply(., min, na.rm = TRUE),
+    Q1 = sapply(., quantile, probs = 0.25, na.rm = TRUE),
+    Median = sapply(., median, na.rm = TRUE),
+    Q3 = sapply(., quantile, probs = 0.75, na.rm = TRUE),
+    Max = sapply(., max, na.rm = TRUE),
+    Mean = sapply(., mean, na.rm = TRUE),
+    sd = sapply(., sd, na.rm = TRUE), 
+    `NA`= sapply(., function(x) sum(is.na(x)))
+  )%>%
+  t() %>%                                # Transpose so stats are rows
+  as.data.frame() %>%
+  `colnames<-`("Age") %>%
+  tibble::rownames_to_column("Statistic") 
+  numeric[[name_i]] <- left_join(age, numeric[[name_i]])
+  
+  stats_timepoints_less_14 <- databases[[i]] %>%
+    filter (Time<=14)%>%
+    dplyr::select(Time)%>%
+    summarise(
+    Min = sapply(., min, na.rm = TRUE),
+    Q1 = sapply(., quantile, probs = 0.25, na.rm = TRUE),
+    Median = sapply(., median, na.rm = TRUE),
+    Q3 = sapply(., quantile, probs = 0.75, na.rm = TRUE),
+    Max = sapply(., max, na.rm = TRUE),
+    Mean = sapply(., mean, na.rm = TRUE),
+    sd = sapply(., sd, na.rm = TRUE), 
+    `NA`= sapply(., function(x) sum(is.na(x)))
+  )%>%
+  t() %>%                                # Transpose so stats are rows
+  as.data.frame() %>%
+  `colnames<-`("Time under 14d")%>%
+  tibble::rownames_to_column("Statistic") 
+  
+  stats_timepoints_more_15 <- databases[[i]] %>%
+    filter (Time>14)%>%
+    dplyr::select(Time)%>%
+    summarise(
+    Min = sapply(., min, na.rm = TRUE),
+    Q1 = sapply(., quantile, probs = 0.25, na.rm = TRUE),
+    Median = sapply(., median, na.rm = TRUE),
+    Q3 = sapply(., quantile, probs = 0.75, na.rm = TRUE),
+    Max = sapply(., max, na.rm = TRUE),
+    Mean = sapply(., mean, na.rm = TRUE),
+    sd = sapply(., sd, na.rm = TRUE), 
+    `NA`= sapply(., function(x) sum(is.na(x)))
+  )%>%
+  t() %>%                                # Transpose so stats are rows
+  as.data.frame() %>%
+  `colnames<-`("Time more 15d")%>%
+  tibble::rownames_to_column("Statistic") 
+  numeric[[name_i]] <- left_join(numeric[[name_i]],stats_timepoints_less_14)
+  numeric[[name_i]] <- left_join(numeric[[name_i]],stats_timepoints_more_15)
+  numeric[[name_i]] <-numeric[[name_i]]%>% dplyr::select(Statistic, Age, Time, `Time under 14d`, `Time more 15d`, everything())
+  
+  write.xlsx(numeric[[name_i]], paste0(Sys.Date(), "LG_numeric_stats.xlsx"), append=T, sheetName=name_i)
+  }  
+  
+as <- data.frame(Adults = c(12,73,0), Children = c(63,83,0))
+rownames(as) <- c("AS", "S", "severe")
+fisher.test(as)
+
+sex <- data.frame(Adults = c(43,42), Children = c(70,76))
+rownames(sex) <- c("F", "M")
+fisher.test(sex)
+
+
+timepoints <- data.frame(Adults = c(50,33,2,0), Children = c(64,56,23,3))
+rownames(timepoints) <- c("1 timepoint", "2 timepoints", "3 timepoints", "4 timepoints")
+fisher.test(timepoints)
+
+wilcox.test(data[data$Group=="Children"&data$Time<=14,]$Time, data[data$Group=="Adults"&data$Time<=14,]$Time, paired = FALSE)
+wilcox.test(data[data$Group=="Children"&data$Time>14,]$Time, data[data$Group=="Adults"&data$Time>14,]$Time, paired = FALSE)
+wilcox.test(data[data$Group=="Children",]$Time, data[data$Group=="Adults",]$Time, paired = FALSE)
+wilcox.test(data[data$Group=="Children",]$Age, data[data$Group=="Adults",]$Age, paired = FALSE)
+
+#For subset
+timepoints_subset <-  data.frame(Adults = c(49,31,0,0), Children = c(32,17,3,0))
+rownames(timepoints_subset) <- c("1 timepoint", "2 timepoints", "3 timepoints", "4 timepoints")
+fisher.test(timepoints_subset)
+
+as_subset <-  data.frame(Adults = c(11,69,0), Children = c(17,35,0))
+rownames(as_subset) <- c("AS", "S", "severe")
+fisher.test(as_subset)
+
+sex_subset <-  data.frame(Adults = c(40,40), Children = c(26,26))
+fisher.test(sex_subset)
+
+#acute timepoints
+wilcox.test(data_subset[data_subset$Group=="Children"&data_subset$Time<=14,]$Time, data_subset[data_subset$Group=="Adults"&data_subset$Time<=14,]$Time, paired = FALSE)
+#convalescent timepoints
+wilcox.test(data_subset[data_subset$Group=="Children"&data_subset$Time>14,]$Time, data_subset[data_subset$Group=="Adults"&data_subset$Time>14,]$Time, paired = FALSE)
+
+wilcox.test(data_subset[data_subset$Group=="Children",]$Time, data_subset[data_subset$Group=="Adults",]$Time, paired = FALSE)
+wilcox.test(data_subset[data_subset$Group=="Children",]$Age, data_subset[data_subset$Group=="Adults",]$Age, paired = FALSE)
+
+
+```
+
+***********************
+### Figure 2: Lower magnitude but long-lasting maintenance of children’s convalescent IgG
+***********************
+```{r Figure 2, tidy =F}
+#############################################################
+## Figure 2G: GAMM of IgG S levels during time 
+data%>% filter(!is.na(IgG_S))%>% group_by(Group)%>% summarise(max(Time)) # Select Time <=180 as it is the latest time for adults
+
+
+# Try different models 
+model.1 <- gam(IgG_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=180&!is.na(data$IgG_S),], method = "REML") 
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+ 
+ # with less variables 
+model.2 <- gam(IgG_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=180&!is.na(data$IgG_S),], method = "REML")
+model.3 <- gam(IgG_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=180&!is.na(data$IgG_S),], method = "REML")
+model.4 <- gam(IgG_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=180&!is.na(data$IgG_S),], method = "REML") # lower AIC
+  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+anova(model.2, model.1, test="Chisq")
+anova(model.3, model.1, test="Chisq")
+anova(model.4, model.1, test="Chisq")
+lrtest(model.4, model.1)
+AIC(model.1, model.4)
+BIC(model.1, model.4)
+AIC(model.1, model.2)
+anova(model.1, model.4, test="Chisq")
+
+# Better for Model 1 
+
+model <-  gam(IgG_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex+Symptoms,data = data[data$Time<=180&!is.na(data$IgG_S),], method = "REML") 
+summary(model)
+
+coeff <-model$coefficients # Get the coeeficients
+percent_change <- coeff[2]/coeff[1]*100 # Get the percentage of change for children compared to adults
+print("% Change in children")
+percent_change
+
+#Plot the model curves
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=180&!is.na(data$IgG_S),], aes(Time,IgG_S, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("S-IgG (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=180&!is.na(data$IgG_S),], aes(y = IgG_S), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+
+        scale_color_manual(values = c("#686868","#FD1B1B" )) +
+        scale_x_continuous(limits = c(0, 182), breaks = seq(0, 180, by = 45)) +
+        scale_y_continuous(limits = c(0, NA), breaks=seq(0,2.5,by=0.5)) +
+        theme(legend.position = "none")+
+        geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+        geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+        geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+        geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_IgG_S_gam.pdf"), graph, width= 6, height=5)
+
+
+##############################################
+## Figure 2H: IgG_N
+
+data%>% filter(!is.na(IgG_N))%>% group_by(Group)%>% summarise(max(Time)) # Select 138 days
+data%>% filter(!is.na(IgG_N),Time<=138)%>% group_by(Group)%>% summarise(n_samples = n(), n_participants = n_distinct(Hospital_no))
+
+
+#Different models
+model.1 <- gam(IgG_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=138&!is.na(data$IgG_N),], method = "REML") 
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+ 
+ # with less variables 
+model.2 <- gam(IgG_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=138&!is.na(data$IgG_N),], method = "REML")
+model.3 <- gam(IgG_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=138&!is.na(data$IgG_N),], method = "REML")
+model.4 <- gam(IgG_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$IgG_N),], method = "REML") # lower AIC
+
+#Compare the models  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.1, model.2, test="Chisq")
+anova(model.1, model.4, test="Chisq")
+anova(model.2, model.4, test="Chisq")
+anova(model.3, model.4, test="Chisq")
+
+# similar, keep less variables so model 4
+
+model <-  gam(IgG_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group,data = data[data$Time<=138&!is.na(data$IgG_N),], method = "REML") 
+summary(model)
+coeff <-model$coefficients
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$IgG_N),], aes(Time,IgG_N, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("N-IgG (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgG_N),], aes(y = IgG_N), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(), panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+
+        scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 140), breaks = seq(0, 140, by = 20)) +
+    scale_y_continuous(limits = c(0, NA), breaks=seq(0,1.5,by=0.5)) +
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_IgG_N_gam.pdf"), graph, width= 6, height=5)
+
+
+###############################################################
+### Figure 2M: ratio of IgG/IgM for Spike-IgG
+
+data$ratio_S <- data$IgG_S/data$IgM_S
+data$log_ratio_S <- log(data$ratio_S, 10)
+
+data%>% 
+  filter (!is.na(log_ratio_S))%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time=max(Time))
+
+#Pick under 104 days
+
+data%>% 
+  filter (!is.na(log_ratio_S)& Time <=104)%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time=max(Time))
+
+point_colors <- c("Adults" = "#686868", "Children" = "#FD1B1B" )
+
+
+model.1 <- gam(log_ratio_S~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data = data[data$Time<=104&!is.na(data$log_ratio_S), ], method = "REML") 
+model.2 <- gam(log_ratio_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group, data = data[data$Time<=104&!is.na(data$log_ratio_S), ], method = "REML")
+model.3 <- gam(log_ratio_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data=data[data$Time<=104&!is.na(data$log_ratio_S), ] , method = "REML")
+model.4 <- gam(log_ratio_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=104&!is.na(data$log_ratio_S), ], method = "REML") 
+  
+AIC(model.1, model.2, model.3, model.4)
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+BIC(model.1, model.2, model.3, model.4)
+
+anova(model.1, model.2, test ="Chisq")
+anova(model.2, model.4, test ="Chisq")
+anova(model.3, model.4, test ="Chisq")
+anova(model.1, model.3, test ="Chisq")
+anova(model.1, model.4, test ="Chisq")
+
+# model.3 is the best, significant difference with 4
+model <- model.3
+summary(model)
+
+coeff <-model$coefficients
+percent_change <- (10^(coeff[3])-1)*100
+percent_change
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr =plot$fv$fit-plot$fv$CI,
+                       upr = plot$fv$fit+plot$fv$CI)
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[data$Time<=104&!is.na(data$log_ratio_S), ], aes(Time,log_ratio_S, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("S-IgG/IgM ratio")
+(graph<-graph + geom_point(data = data[data$Time<=104&!is.na(data$log_ratio_S), ], aes(y = log_ratio_S), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+  
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey") + # Add dashed line at y = 0
+    scale_x_continuous(limits = c(0, 108), expand = c(0.0001, 0.01)) +
+    scale_y_continuous( breaks = seq(-3,1, by=1),  labels = scales::label_parse()(c("10^-3", "10^-2", "10^-1", "10^0", "10^1")))+ # Use scientific labels)+
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax =upr), alpha = 0.2, fill = "#FD1B1B")) 
+    
+
+ggsave(paste(Sys.Date(), "LG_longitudinal_ratioS_gam.pdf"), graph, width= 6, height=5)
+
+########################################
+# Figure 2N : ratio N-IgG/IgM
+data$ratio_N <- data$IgG_N/data$IgM_N
+data$log_ratio_N <- log(data$ratio_N,10)
+
+data%>% filter(!is.na(log_ratio_N)& Time <=138)%>% group_by(Group)%>% summarise(n_samples=n(), n_indiv = n_distinct(Hospital_no))
+#Pick Time <=138 Days
+
+
+model.1 <- gam(log_ratio_N~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data = data[data$Time<=138&!is.na(data$ratio_N), ], method = "REML") 
+model.2 <- gam(log_ratio_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group, data = data[data$Time<=138&!is.na(data$ratio_N), ], method = "REML")
+model.3 <- gam(log_ratio_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data=data[data$Time<=138&!is.na(data$ratio_N), ] , method = "REML")
+model.4 <- gam(log_ratio_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$ratio_N), ], method = "REML") 
+  
+AIC(model.1, model.2, model.3, model.4)
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.1, model.4, test ="Chisq")
+anova(model.3, model.4, test ="Chisq")
+compareML(model.3, model.4)
+
+model <- model.4
+
+summary(model)
+coeff <-model$coefficients
+percent_change <- (10^(coeff[2])-1)*100
+percent_change
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$ratio_N), ], aes(Time,log_ratio_N, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("N-IgG/IgM ratio")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$log_ratio_N), ], aes(y = log_ratio_N), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25))+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey") + # Add dashed line at y = 0
+    scale_x_continuous(limits = c(0, 148), expand = c(0.0001, 0.01), breaks= seq(0,140, by=20)) +
+    scale_y_continuous(breaks = seq(-3,3, by=1),  labels = scales::label_parse()(c("10^-3", "10^-2", "10^-1", "10^0", "10^1", "10^2", "10^3")))+ # Use scientific labels)+
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax =upr), alpha = 0.2, fill = "#FD1B1B")) 
+    
+#ggsave(paste(Sys.Date(), "LG_longitudinal_ratioN_gam.pdf"), graph, width= 6, height=5)    
+
+#For legend
+data%>% 
+  filter ( Time <=138, !is.na(log_ratio_N))%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no))
+
+```
+
+***********************
+### Figure 3: IgG avidity is higher in children against SARS-CoV-2 but not OC43 Spike
+***********************
+```{r Figure 3_IgG Avidity,  tidy =F}
+################################### 
+# Avidity IgG_S: 3A
+
+model.1 <- gam(avidity_S~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data = data[data$Time<=138&!is.na(data$avidity_S), ], method = "REML") 
+model.2 <- gam(avidity_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group, data = data[data$Time<=138&!is.na(data$avidity_S), ], method = "REML")
+model.3 <- gam(avidity_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data=data[data$Time<=138&!is.na(data$avidity_S), ] , method = "REML") 
+model.4 <- gam(avidity_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$avidity_S), ], method = "REML") 
+  
+AIC(model.1, model.2, model.3, model.4) # smallest is 4
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.1, model.4, test ="Chisq") # non significant
+anova(model.2, model.4, test ="Chisq") # non significant
+anova(model.3, model.4, test ="Chisq") #  significant, 4 better
+compareML(model.1, model.4)
+
+# Keep Model 4
+
+model <- gam(avidity_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$avidity_S), ], method = "REML")
+  
+summary(model)
+
+# get the percentage of increase compared to adults
+coeff <-model$coefficients
+coeff <- coeff[1:2]
+percent_change <- coeff[2]/coeff[1]*100
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$avidity_S), ], aes(Time,avidity_S, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("S-IgG Avidity (%)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$avidity_S), ], aes(y = avidity_S), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25), 
+        legend.position = "none")+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 145), expand = c(0, 0), breaks=seq(0, 140, by=20)) +
+    scale_y_continuous(limits= c(-0.5,110), expand = c(0, 0))+
+    geom_hline(yintercept = 50, linetype = "dotted", color = "grey1") + # Add dashed line at y = 50
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax =upr), alpha = 0.2, fill = "#FD1B1B")) 
+    
+#ggsave(paste(Sys.Date(), "LG_longitudinal_avidity_S_gamm_gaussian_only_ID.pdf"), graph, width= 6, height=5) 
+
+data[data$Time<=138&!is.na(data$avidity_S), ]%>%
+  group_by(Group)%>%
+  summarise(number=n(), unique=n_distinct(Hospital_no))
+
+
+############################################ 
+# Avidity of N-IgG: 3C 
+
+data[data$Time<=138&!is.na(data$avidity_N), ]%>%
+  group_by(Group)%>%
+  summarise(number=n(), unique=n_distinct(Hospital_no))
+
+model.1 <- gam(avidity_N~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data = data[data$Time<=138&!is.na(data$avidity_N), ], method = "REML") 
+model.2 <- gam(avidity_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group, data = data[data$Time<=138&!is.na(data$avidity_N), ], method = "REML")
+model.3 <- gam(avidity_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data=data[data$Time<=138&!is.na(data$avidity_N), ] , method = "REML") 
+model.4 <- gam(avidity_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$avidity_N), ], method = "REML") 
+  
+AIC(model.1, model.2, model.3, model.4) # smallest is 4
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.3, model.1, test ="Chisq") # non significant
+anova(model.4, model.1, test ="Chisq") # non significant
+anova(model.3, model.4, test ="Chisq") # non significant
+compareML(model.3, model.4)
+
+model <- gam(avidity_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$avidity_N), ], method = "REML")
+  
+summary(model)
+# get the percentage of increase compared to adults
+coeff <-model$coefficients
+coeff <- coeff[1:2]
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$avidity_N), ], aes(Time,avidity_N, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("N-IgG Avidity (%)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$avidity_N), ], aes(y = avidity_N), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth =  0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25))+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 148), expand = c(0, 0), breaks=seq(0, 140, by=20)) +
+    scale_y_continuous(limits= c(-1,120), expand = c(0, 0),  breaks=seq(0, 120, by=25))+
+    geom_hline(yintercept = 50, linetype = "dotted", color = "grey1") +
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax =upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+ggsave(paste(Sys.Date(), "LG_longitudinal_avidity_N_gamm_gaussian_only_ID.pdf"), graph, width= 6, height=5) 
+
+data%>%filter(!is.na(avidity_N), Time<=138)%>% group_by(Group) %>% summarise(n_samples=n(), n_indiv=n_distinct(Hospital_no))
+
+##########################
+# Avidity of OC43: 3F
+
+data[!is.na(data$avidity_OC43)&data$Time<=138, ]%>%
+  group_by(Group)%>%
+ summarise(number=n(), unique=n_distinct(Hospital_no))
+
+model.norm <- gam(avidity_OC43 ~ s(Time, by=Group)+ s(Hospital_no, bs = "re") +Group,data = data[!is.na(data$avidity_OC43)&data$Time<=138, ], method = "REML") 
+model.norm2 <-  gam(avidity_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group,data = data[!is.na(data$avidity_OC43)&data$Time<=138, ], method = "REML") #
+model.norm3 <-  gam(avidity_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group,data = data[!is.na(data$avidity_OC43)&data$Time<=138, ], method = "REML") 
+model.norm4 <-  gam(avidity_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Sex+Group,data = data[!is.na(data$avidity_OC43)&data$Time<=138, ], method = "REML") 
+
+AIC(model.norm, model.norm2,model.norm3,model.norm4) # lowest AIC is 4
+gam.check(model.norm)# seems better as more linear fit between fitted and response in gam.check
+gam.check(model.norm2)
+gam.check(model.norm3)
+gam.check(model.norm4)
+
+anova(model.norm, model.norm4, test="Chisq") # non-significant so keep simplest
+
+model.norm <- gam(avidity_OC43 ~ s(Time, by=Group)+ s(Hospital_no, bs = "re")+Group ,data = data[!is.na(data$avidity_OC43)&data$Time<=138, ], method = "REML") 
+
+summary(model.norm)
+
+# get the percentage of increase compared to adults
+coeff <-model.norm$coefficients
+
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+
+plot <- plot_smooth(model.norm,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+
+plot_children<- plot_smooth(model.norm,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit =plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[!is.na(data$avidity_OC43)&data$Time<=138, ], aes(Time,avidity_OC43, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("OC43-IgG Avidity (%)")
+(graph<-graph + geom_point(data = data[!is.na(data$avidity_OC43)&data$Time<=138, ], aes(y = avidity_OC43), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 145), expand = c(0, 0), breaks=seq(0, 145, by=20)) +
+    scale_y_continuous(limits=c(0,112),n.breaks=6, expand=c(0.01,0))+
+    theme(legend.position = "none")+
+    geom_hline(yintercept = 50, linetype = "dotted", color = "grey1") +
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax =upr), alpha = 0.2, fill = "#FD1B1B")) 
+    
+ggsave(paste(Sys.Date(), "LG_longitudinal_avidity_OC43_gamm_gaussian_only_ID.pdf"), graph, width= 6, height=5) 
+```
+***********************
+### Figure 4: FcR binding at convalescent timepoints is higher in children than adults
+***********************
+```{r Figure 4: FcR binding, tidy =F}
+#########
+## Figure 4A
+#######  FcgR2a
+max(data[data$Group=="Children"&!is.na(data$FcgR2a), "Time"]) #138 
+max(data[data$Group=="Adults"&!is.na(data$FcgR2a), "Time"]) # 180
+
+#Pick Time <=138 days
+data[!is.na(data$FcgR2a)&data$Time<=138, ]%>%
+  group_by(Group)%>%
+ summarise(number=n(), unique=n_distinct(Hospital_no))
+
+model.1 <- gam(FcgR2a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data = data[!is.na(data$FcgR2a)&data$Time<=138,], method = "REML") 
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+
+model.2 <- gam(FcgR2a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group, data = data[!is.na(data$FcgR2a)&data$Time<=138,], method = "REML") 
+model.3 <- gam(FcgR2a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data = data[!is.na(data$FcgR2a)&data$Time<=138,], method = "REML") 
+model.4 <- gam(FcgR2a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[!is.na(data$FcgR2a)&data$Time<=138,], method = "REML") 
+AIC( model.1, model.2, model.3, model.4) # smaller is model1
+anova(model.1, model.4, test ="Chisq")
+anova(model.1, model.2, test ="Chisq")
+anova(model.1, model.3, test ="Chisq")
+
+compareML(model.4, model.1)
+
+# keep model 4 
+plot <- plot_smooth(model.4,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+plot_children<- plot_smooth(model.4,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[!is.na(data$FcgR2a)&data$Time<=138,], aes(Time,FcgR2a, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab(expression("S-Fc" * gamma * "RIIa binding (O.D.)"))
+(graph<-graph + geom_point(data = data[!is.na(data$FcgR2a)&data$Time<=138,], aes(y = FcgR2a), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.7, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 148),expand = c(0, 0), breaks = seq(0, 140, by = 20)) +
+    scale_y_continuous(limits = c(0, NA), expand = c(0.005, 0)) +
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", linewidth = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", linewidth = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_FcgR2a_gam.pdf"), graph, width= 6, height=5)
+
+###############
+# Figure 4D: FcgR3a
+max(data[data$Group=="Children"&!is.na(data$FcgR3a), "Time"]) #206 
+max(data[data$Group=="Adults"&!is.na(data$FcgR3a), "Time"]) # 180
+#Pick Time <=180
+
+data[!is.na(data$FcgR3a)&data$Time<=180, ]%>%
+  group_by(Group)%>%
+ summarise(number=n(), unique=n_distinct(Hospital_no))
+
+model.fcgr3a <- gam(FcgR3a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data =data[data$Time<=180&!is.na(data$FcgR3a),], method = "REML") 
+summary(model.fcgr3a)
+gam.check(model.fcgr3a)
+
+ # with less variables 
+model.fcgr3a.2 <- gam(FcgR3a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+ Group, data = data[data$Time<=180&!is.na(data$FcgR3a),], method = "REML")
+model.fcgr3a.3 <- gam(FcgR3a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data = data[data$Time<=180&!is.na(data$FcgR3a),], method = "REML")
+model.fcgr3a.4 <- gam(FcgR3a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+ Group, data = data[data$Time<=180&!is.na(data$FcgR3a),], method = "REML") # lower AIC
+  
+AIC(model.fcgr3a, model.fcgr3a.2, model.fcgr3a.3, model.fcgr3a.4) # smallest is 4 
+anova(model.fcgr3a, model.fcgr3a.4, test="Chisq")
+anova(model.fcgr3a.2, model.fcgr3a.4, test="Chisq")
+compareML(model.fcgr3a, model.fcgr3a.4)
+
+model.fcgr3a <- gam(FcgR3a ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=180&!is.na(data$FcgR3a),], method = "REML") 
+plot <- plot_smooth(model.fcgr3a,  view = "Time", rm.ranef = T, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+plot_children<- plot_smooth(model.fcgr3a,  view = "Time", rm.ranef = T, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=180&!is.na(data$FcgR3a),], aes(Time,FcgR3a, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab(expression("S-Fc" * gamma * "RIIIa binding (O.D.)"))
+(graph<-graph + geom_point(data = data[data$Time<=180&!is.na(data$FcgR3a),], aes(y = FcgR3a), na.rm=T, shape=20, size=3 ) +
+    theme_bw(base_size=16)+
+    theme(panel.background = element_rect(fill="transparent"), 
+          panel.border = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.line = element_line(linewidth = 0.76, linetype = "solid",colour = "black"), 
+          axis.text = element_text(size=24), 
+          axis.title = element_text(size=25))+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 185), breaks = seq(0, 180, by = 30), expand=c(0.005,0)) +
+    scale_y_continuous(limits = c(0, 3), expand=c(0, 0.013)) +
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+ggsave(paste(Sys.Date(), "LG_longitudinal_FcgR3a_gam.pdf"), graph,width= 6, height=5)
+
+# get the percentage of increase compared to adults
+coeff <- model.fcgr3a$coefficients
+coeff <- coeff[1:2]
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+```
+
+*************************************************************
+### Multivariate graphs 
+
+***********************
+##### Figure 5: Multivariate analyses confirm the establishment of a different immune response depending on age group
+***********************
+```{r Figure 5: correlations and MFA, tidy =F, warning=FALSE}
+#################
+# Figure 5 A and B: networks
+
+##############
+# Get correlations matrices
+datacors_kids<-cor(kids_subset[,-c(1:4, 6,29:31, 35:ncol(kids_subset))], method = "spearman", use = "pairwise.complete.obs")
+datacors_adults <- cor(adults_subset[,-c(1:4, 6,29:31, 35:ncol(adults_subset))], method = "spearman", use = "pairwise.complete.obs")
+#Correct the matrices because of Correlation/covariance matrix are not positive definite
+datacors_fixed_kids <- as.matrix(nearPD(datacors_kids)$mat) 
+datacors_fixed_adults <- as.matrix(nearPD(datacors_adults)$mat) 
+
+
+# Get the p-values
+cor.pmat <- function(x, ...) {
+    mat <- as.matrix(x)
+    n <- ncol(mat)
+    p.mat<- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    for (i in 1:(n - 1)) {
+      for (j in (i + 1):n) {
+        tmp <- cor.test(mat[, i], mat[, j], method="spearman",use = "pairwise.complete.obs",...)
+        p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+      }
+    }
+    colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+    p.mat
+}
+
+#p-values for children
+pval_matrix= cor.pmat(kids_subset[,-c(1:4, 6,29:31, 35:ncol(kids_subset))])
+# Number of tests
+num_tests <- sum(!is.na(pval_matrix))
+
+# Apply Bonferroni correction
+pval_bonf <- p.adjust(pval_matrix, method = "bonferroni", n = num_tests)
+
+# Reshape into matrix form
+pval_bonf_matrix <- matrix(pval_bonf, nrow = nrow(pval_matrix), ncol = ncol(pval_matrix))
+colnames(pval_bonf_matrix) = colnames(pval_matrix)
+rownames(pval_bonf_matrix) = rownames(pval_matrix)
+
+#Calculate p-values for adults
+pval_matrix_adults= cor.pmat(adults_subset[,-c(1:4, 6,29:31, 35:ncol(adults_subset))])
+# Number of tests
+num_tests <- sum(!is.na(pval_matrix_adults))
+# Apply Bonferroni correction
+pval_bonf_adults <- p.adjust(pval_matrix_adults, method = "bonferroni", n = num_tests)
+
+# Reshape into matrix form
+pval_bonf_matrix_adults <- matrix(pval_bonf_adults, nrow = nrow(pval_matrix_adults), ncol = ncol(pval_matrix_adults))
+colnames(pval_bonf_matrix_adults) = colnames(pval_matrix_adults)
+rownames(pval_bonf_matrix_adults) = rownames(pval_matrix_adults)
+
+#Get labels for the plot
+labels <- c("Age", "Time", "S-IgG", "N-IgG", "ORF8\nIgG", "OC43\nIgG","RBD\nIgG","S1\nIgG","S2\nIgG",  "S-IgM", "N-IgM", "OC43\nIgM", "ORF8\nIgM", "RSV\nIgM",expression(Fc*gamma*R[3]*a), expression(Fc*gamma*R[2]*a),"S-IgA", "N-IgA", "ORF8\nIgA", "OC43\nIgA", "IgM\ntotal","PRNT", "Avidity\nS", "Avidity\nN", "Avidity\nOC43" ,"Avidity\nORF8" )
+
+#Groups of features
+grouping = list(Variable = 1:2, IgG= 3:9, IgM=c(10:14, 21), IgA=17:20, avidity=23:26, FcgR=15:16, neutralisation=22)
+
+
+# Assign a color per group
+group_names <- names(grouping)
+group_colors <- c("#000000","#56B4E9","#FF00FF", "#009E73", "#FF5E00","#342BBC", "#FF0000")# One color per group
+
+# Create a group label per node (vector the same length as number of nodes)
+group_vector <- rep(NA, max(unlist(grouping)))
+for (i in seq_along(grouping)) {
+  group_vector[grouping[[i]]] <- i
+}
+
+# Map each node to its border color using the group_vector
+border_colors <- group_colors[group_vector]
+border_colors <- adjustcolor(border_colors, alpha.f = 0.4)
+
+#Save the graph in PDF
+pdf(paste0(Sys.Date(),"LG_correlation_network_kids_subset_bonf_thre.pdf"),width = 10, height = 8)
+qgraph.kids<-qgraph(datacors_fixed_kids , 
+       layout ="spring", 
+       graph = "cor", alpha=0.05, bonf=TRUE, sampleSize= nrow(kids_subset), 
+       nodeNames = labels, legend=FALSE,threshold= "bonferroni",
+       legend.cex = 0.4, groups=grouping, color=rep("white",7),    border.color=border_colors,border.width=4,
+       cut = 0.4,
+       details=F,
+       maximum = 1, 
+       minimum = "sig", 
+       esize = 25,#edge size as largest
+       posCol =  "#EF4B53", #color of positive edges
+       negCol = "#406AF5", 
+       curveAll = TRUE,
+       curveDefault=0.5,
+       vsize = 7,        # Increased node size
+       shape="ellipse",
+       repulsion =0.8, 
+       theme = "colorblind", 
+       borders =T, 
+       labels=labels,
+        label.cex=1.1, 
+       label.norm = "OOO", 
+       label.scale=T,
+       label.prop=0.8,
+       edge.labels=F, bg = "transparent",
+       mode="strength")
+dev.off()
+nodes_kids <- qgraph.kids$layout # Get the position of the nodes computed with "spring" setting
+#Move nodes to make it clearer :
+nodes_kids <- matrix(c(
+  -0.60260154,  0.79782816,
+   0.32714079, -0.60000000,
+   0.70711870, -0.15703605,
+   0.73487025, -0.48608209,
+  -0.58211417,  0.28578024,
+  -0.26614130,  0.70052427,
+   0.25000000,  0.05585107,
+   0.84045769,  0.57712091,
+   0.99848140,  0.25729585,
+   0.42289968, -0.92606770,
+   0.11477004, -0.73203465,
+   0.17908860,  0.33000000,
+   0.47022356,  0.93025625,
+  -0.40993180, -0.80033550,
+   1.00000000, -0.33275704,
+   0.99893790, -0.05433621,
+  -1.20000000, -0.32082126,
+  -0.74245715, -0.61865690,
+  -0.57330790, -0.20132142,
+  -1.00000000,  0.05409510,
+  -0.08102475, -1.00000000,
+   0.45000000,  0.60000000,
+  -0.13996845, -0.26736071,
+  -0.14161778,  0.19454797,
+  -0.04292994,  1.00000000,
+  -0.89696060,  0.47053343
+), ncol = 2, byrow = TRUE)
+
+# Assign row and column names
+rownames(nodes_kids) <- c("Age", "Time", "IgG_S", "IgG_N", "IgG_ORF8", "IgG_OC43", "IgG_RBD", "IgG_S01", "IgG_S02",
+                   "IgM_S", "IgM_N", "IgM_OC43", "IgM_ORF8", "IgM_RSVF_OD", "FcgR3a", "FcgR2a", "IgA_S",
+                   "IgA_N", "IgA_ORF8", "IgA_OC43", "Total_IgM", "PRNT_50", "avidity_S", "avidity_N",
+                   "avidity_OC43", "avidity_ORF8")
+
+
+#For children
+qgraph_kids=qgraph(datacors_fixed_kids , 
+       layout =nodes_kids, 
+       graph = "cor", alpha=0.05, bonf=TRUE, sampleSize= nrow(kids_subset), 
+       nodeNames = labels, legend=FALSE,threshold= "bonferroni",
+       legend.cex = 0.4, groups=grouping, color=rep("white",7),    border.color=border_colors,border.width=4,
+       cut = 0.4,
+       details=F,
+       maximum = 1, 
+       minimum = "sig", 
+       esize = 25,#edge size as largest
+       posCol =  "#EF4B53", #color of positive edges
+       negCol = "#406AF5", 
+       curveAll = TRUE,
+       curveDefault=0.5,
+       vsize = 7,        # Increased node size
+       shape="ellipse",
+       repulsion =0.8, 
+       theme = "colorblind", 
+       borders =T, 
+       labels=labels,
+        label.cex=1.1, 
+       label.norm = "OOO", 
+       label.scale=T,
+       label.prop=0.8,
+       edge.labels=F, bg = "transparent",
+       mode="strength")
+dev.off()
+
+#For adults
+qgraph_adults <- qgraph(datacors_fixed_adults , 
+       layout =nodes_kids, 
+       graph = "cor", alpha=0.05, bonf=TRUE, sampleSize= nrow(adults_subset), 
+       nodeNames = labels, legend=FALSE,threshold= "bonferroni",
+       legend.cex = 0.4, groups=grouping, color=rep("white",7),    border.color=border_colors,border.width=4,
+       cut = 0.4,
+       details=F,
+       maximum = 1, 
+       minimum = "sig", 
+       esize = 25,#edge size as largest
+       posCol =  "#EF4B53", #color of positive edges
+       negCol = "#406AF5", 
+       curveAll = TRUE,
+       curveDefault=0.5,
+       vsize = 7,        # Increased node size
+       shape="ellipse",
+       repulsion =0.8, 
+       theme = "colorblind", 
+       borders =T, 
+       labels=labels,
+        label.cex=1.1, 
+       label.norm = "OOO", 
+       label.scale=T,
+       label.prop=0.8,
+       edge.labels=F, bg = "transparent",
+       mode="strength")
+dev.off()
+
+#########################################
+#### Figure 5C: PCA
+
+# Define the colors used for the graphs
+colours <- c("#686868","#FD1B1B")   
+
+# Impute the data to fill missing values
+for_pca <- data_subset[,c(7:26,28:34)] # do not take age 
+imputed_data <- imputePCA(for_pca, ncp= 6)
+
+#Calculate the PCA
+pca_cat <- PCA(X=imputed_data$completeObs, scale.unit=T, graph=F,ncp=6)
+variance <- pca_cat$eig
+eig = get_eig(pca_cat)
+
+# Extract the PCA results
+# PC 1-2
+pca_scores <- pca_cat$ind$coord [,1:2]
+#Need a distance matrix 
+dist_matrix <- dist(pca_scores, method = "euclidean")
+#grouping variable
+group_data <- data.frame(Group = data_subset$Group)  
+
+# Run ANOSIM
+anosim_result <- anosim(dist_matrix, grouping = group_data$Group, permutations = 999)
+summary(anosim_result) # Significance: 0.124
+
+# PC 3-4
+pca_scores <- pca_cat$ind$coord [,3:4]
+#Need a distance matrix 
+dist_matrix <- dist(pca_scores, method = "euclidean")
+#grouping variable
+group_data <- data.frame(Group = data_subset$Group) 
+
+anosim_result <- anosim(dist_matrix, grouping = group_data$Group, permutations = 999)
+summary(anosim_result)
+
+# PC 5 and 6
+pca_scores <- pca_cat$ind$coord [,5:6]
+#Need a distance matrix 
+dist_matrix <- dist(pca_scores, method = "euclidean")
+
+anosim_result <- anosim(dist_matrix, grouping = group_data$Group, permutations = 999)
+summary(anosim_result)
+
+cat("Plot to decide of the number of principal components to investigate")
+fviz_screeplot(pca_cat, addlabels=T) # keep 6 dimensions 
+
+#Plot for PC 3 and 4 
+cat( "Principal components 3 and 4")
+plot<-fviz_pca_ind(pca_cat,
+             axes = c(3,4),
+             fill = as.factor(data_subset$Group),
+             pointsize=2.5,
+             palette = colours,
+             geom=c("point"),
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",
+             pointshape=21, height=16,title="",xlab=paste0("PC-3 (",round(variance[3,2],2),"%)"), 
+             ylab=paste0("PC-4 (",round(variance[4,2],2),"%)"),
+legend.title="Age category") +theme(
+  legend.text = element_text(size = 18), legend.position="none",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_text(size=18), 
+  panel.grid = element_blank(), 
+  panel.background = element_rect(fill = "transparent", linewidth =0.5),aspect.ratio=1)  
+
+plot
+ggsave(paste0(Sys.Date(), "LG_PCA_age_category_PC3_4_subset.pdf"),plot,  height=12, width=12.5,unit="cm")
+
+####################################
+##### Figure 5D
+
+# Dot plot with contributions in all dimensions 
+# Extract variable contributions
+contributions <- as.data.frame(pca_cat$var$contrib)
+contributions$Variable <-c("Time", "S-IgG",
+  "N-IgG", "ORF8-IgG","OC43-IgG",  "RBD-IgG", "S1-IgG", "S2-IgG", "S-IgM", 
+  "N-IgM", "OC43-IgM", "ORF8-IgM", "RSVF-IgM", "FcγR3a", 
+  "FcγR2a", "S-IgA", 
+  "N-IgA", "ORF8-IgA", "OC43-IgA", 
+  "Total IgM","S-avidity", "RBD-avidity", "S1-avidity", "S2-avidity",
+  "N-avidity", "OC43-avidity", "ORF8-avidity" ) 
+
+contributions=contributions%>% arrange(-Dim.3)
+# Convert to long format
+contributions_long <- contributions %>%
+  pivot_longer(
+    cols = starts_with("Dim"), # All columns representing dimensions
+    names_to = "Dimension",
+    values_to = "Contribution"
+  ) %>%
+  arrange(Dimension)
+
+desired_order <- contributions$Variable
+
+loadings_pca <- as.data.frame(pca_cat$var$coord)
+loadings_pca$Variable <-c("Time", "S-IgG",
+  "N-IgG", "ORF8-IgG","OC43-IgG",  "RBD-IgG", "S1-IgG", "S2-IgG", "S-IgM", 
+  "N-IgM", "OC43-IgM", "ORF8-IgM", "RSVF-IgM", "FcγR3a", 
+  "FcγR2a", "S-IgA", 
+  "N-IgA", "ORF8-IgA", "OC43-IgA", 
+  "Total IgM","S-avidity", "RBD-avidity", "S1-avidity", "S2-avidity",
+  "N-avidity", "OC43-avidity", "ORF8-avidity" ) 
+loadings_pca_long <- loadings_pca %>%
+  pivot_longer(
+    cols = starts_with("Dim"), # All columns representing dimensions
+    names_to = "Dimension",
+    values_to = "Loading"
+  ) 
+contributions_long <- left_join(contributions_long, loadings_pca_long)
+contributions_long$Variable <- factor(contributions_long$Variable, levels=desired_order)
+contributions_long_signif <- contributions_long%>% mutate(Contribution = ifelse(Contribution<3.7, NA, Contribution))
+
+graph = ggplot(contributions_long_signif, aes(x = Variable, y = Dimension, size = Contribution, fill = Loading)) +
+  geom_point(shape=21) +
+  scale_size(range = c(4, 20)) +  # Adjust size range of dots
+  scale_fill_gradient2(low="blue", high = "red", mid="white", midpoint = 0) +  # Adjust color gradient
+  theme_minimal() +
+  labs(
+    y = "Principal Components (Dimensions)",
+    x = NULL,
+    size = "Contribution",
+    fill = "Loading", 
+  ) + 
+  theme(
+    axis.text.y = element_text(color = "black", size = 28), 
+    axis.text.x = element_text(color = "black", angle = 90,  size = 28,hjust = 1, vjust = 0.5), axis.title = element_text(size = 32), legend.text = element_text(size=28), legend.title = element_text(size=30),
+    legend.position = "right", legend.box="vertical", legend.key.height =   unit(1.2, "cm") 
+  )
+ggsave(paste0(Sys.Date(), "LG_PCA_Contributions_loadings_significance.pdf"),graph, height=9.5, width=17)
+
+
+#######################
+#### Figure 5E: MFA
+data_subset <- data_subset%>%
+ mutate(Symptoms = ifelse (Symptoms == "AS", "Asymptomatic","Symptomatic"), 
+         Sex = ifelse (Sex == "F", "Female", "Male"))
+data_subset$Sex=as.factor(data_subset$Sex)
+data_subset$Symptoms=as.factor(data_subset$Symptoms)
+
+for_mfa <- data_subset[, c(3,4,6,7:19, 26,20:25,28:34)]
+res.mfa <- MFA(for_mfa, 
+               group = c(3,1,7,6,2, 4,7), 
+               type = c("n","s", "s", "s","s","s","s"),
+               name.group = c("donors_characteristics","Time", "IgG", "IgM","FcR","IgA", "avidity_IgG"),
+               graph = F)
+print(res.mfa)
+eig.val <- get_eigenvalue(res.mfa)
+
+fviz_screeplot(res.mfa, addlabels=TRUE)
+
+couleurs <- c("#686868","#FD1B1B")  
+graph <-fviz_mfa_ind(res.mfa, axes = c(1,2), geom = c("point"),
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",pointsize=2.5,alpha.ind  =0.6,
+             habillage = "Group", # color by groups 
+              height=16,
+             palette = couleurs,
+             repel = TRUE, # Avoid text overlapping
+            xlab=paste("PC-1 (",round(eig.val[1,2],2),"%)"), 
+            ylab=paste("PC-2 (",round(eig.val[2,2],2),"%)"), 
+            legend.title="Age category") +geom_point(shape = 1, size = 2.5, stroke=0.5) +
+  theme(
+  legend.text = element_text(size = 18), legend.position="top",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_blank(), 
+  panel.grid = element_line(colour = "transparent"), 
+  panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1
+)  
+ ggsave(paste(Sys.Date(), "LG_MFA_Analysis_age_group.pdf"), graph, width=12,height=12, unit="cm")           
+
+couleurs <- c("Asymptomatic"="#1E90FF","Symptomatic"="#FFC107")  
+(graph <-fviz_mfa_ind(res.mfa, axes = c(1,2), geom = c("point"),
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",pointsize=2.5,alpha.ind  =0.6,
+             habillage = "Symptoms", # color by groups 
+              height=16,
+             palette = couleurs,
+             repel = TRUE, # Avoid text overlapping
+            xlab=paste("PC-1 (",round(eig.val[1,2],2),"%)"), 
+            ylab=paste("PC-2 (",round(eig.val[2,2],2),"%)"), 
+            legend.title="Age category") +geom_point(shape = 1, size = 2.5,stroke=0.5) +theme(
+  legend.text = element_text(size = 18), legend.position="top",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_blank(), 
+  panel.grid = element_line(colour = "transparent"), 
+  panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1))
+  
+ ggsave(paste(Sys.Date(), "LG_MFA_Analysis_symptoms.pdf"), graph, width=12,height=12,unit="cm")           
+
+
+couleurs <- c("Female"="orange2","Male"="purple"  )
+
+(graph <-fviz_mfa_ind(res.mfa, axes = c(1,2), geom = c("point"),
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",pointsize=2.5,alpha.ind  =0.6,
+             habillage = "Sex", # color by groups 
+              height=16,
+             palette = couleurs,
+             repel = TRUE, # Avoid text overlapping
+            xlab=paste("PC-1 (",round(eig.val[1,2],2),"%)"), 
+            ylab=paste("PC-2 (",round(eig.val[2,2],2),"%)"), 
+            legend.title="Age category") +geom_point(shape = 1, size =2.5, stroke=0.5) +theme(
+  legend.text = element_text(size = 18), legend.position="top",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_blank(), 
+  panel.grid = element_line(colour = "transparent"), 
+  panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1
+)  )
+ ggsave(paste(Sys.Date(), "LG_MFA_Analysis_sex.pdf"), graph, width=12,height=12,unit="cm")     
+ 
+ # Statistics 
+
+mfa_scores <- res.mfa$ind$coord [,1:2]
+#Need a distance matrix 
+dist_matrix_mfa <- dist(mfa_scores, method = "euclidean")
+#grouping variable
+group_data <- data.frame(Group = data_subset$Group)  # should be same order as samples in `pca_scores`
+
+# Run ANOSIM
+anosim_result <- anosim(dist_matrix_mfa, grouping = group_data$Group, permutations = 999)
+
+# View result
+summary(anosim_result) # Significance: 0.001
+
+#For Sex
+group_data <- data.frame(Group = data_subset$Sex)  # should be same order as samples in `pca_scores`
+
+anosim_result <- anosim(dist_matrix_mfa, grouping = group_data$Group, permutations = 999)
+
+# View result
+summary(anosim_result) # Significance: 0.001
+
+#For Symptoms
+group_data <- data.frame(Group = data_subset$Symptoms)  # should be same order as samples in `pca_scores`
+
+anosim_result <- anosim(dist_matrix_mfa, grouping = group_data$Group, permutations = 999)
+summary(anosim_result) # Significance: 0.003
+
+
+#################################
+
+#Figure 5F
+
+
+# Extract loadings and contributions: Figure 5F
+loadings <- as.data.frame(res.mfa$quanti.var$coord)
+loadings_quali <- as.data.frame(res.mfa$quali.var$coord) # 24/11/24
+loadings$variable <- rownames(loadings)
+loadings_quali$variable <- rownames(loadings_quali)
+loadings <- rbind(loadings,loadings_quali )
+
+# Get the colors as contribution 
+contributions <- as.data.frame(res.mfa$quanti.var$contrib)
+contributions$variable <- rownames(contributions)
+contribution_quali <-  as.data.frame(res.mfa$quali.var$contrib)
+contribution_quali$variable <- rownames(contribution_quali)
+contributions <- rbind(contributions,contribution_quali)
+loadings <- merge(loadings,  contributions, suffixes = c("","_contrib"), by="variable")
+
+order_variable <- c("Adults", "Children", "Female", "Male", "Asymptomatic", "Symptomatic","Time", loadings$variable[grepl("IgG", loadings$variable)], loadings$variable[grepl("avidity", loadings$variable)], loadings$variable[grepl("IgM", loadings$variable)], loadings$variable[grepl("IgA", loadings$variable)],"FcgR2a", "FcgR3a"   )
+order_variable=factor(order_variable, levels=order_variable)
+
+rownames(loadings)= loadings$variable
+# Reorder rows to match another object
+reordered_loadings <- loadings[match(order_variable, rownames(loadings)), ]
+rownames(reordered_loadings) <- c("Adults", "Children", "Female", "Male",  "Asymptomatic"  , "Symptomatic",  "Time"  , "N-IgG" , "OC43-IgG" ,"ORF8-IgG" ,"RBD-IgG","S-IgG","S1-IgG", "S2-IgG","N-avidity", "OC43-avidity", "ORF8-avidity","RBD-avidity","S-avidity","S1-avidity","S2-avidity","N-IgM" , "OC43-IgM" ,"ORF8-IgM"   , "RSVF-IgM", "S-IgM"  ,     "Total IgM"  , "N-IgA" ,      "OC43-IgA",    "ORF8-IgA"  ,  "S-IgA",  "FcγR2a","FcγR3a" )
+
+reordered_loadings <- reordered_loadings[c(1:7, 12,11,13,14, 8:10, 19,18,20,21, 15:17, 26,22:25,27,31,28:30,32,33),]
+
+reordered_loadings$variable <-factor(rownames(reordered_loadings),levels =rownames(reordered_loadings))
+
+# Plot non-significant features as grey
+reordered_loadings_stats <- reordered_loadings%>% mutate(Dim.1_contrib= ifelse(Dim.1_contrib<3, NA, Dim.1_contrib))
+reordered_loadings_stats <- reordered_loadings_stats%>% mutate(Dim.2_contrib= ifelse(Dim.2_contrib<3, NA, Dim.2_contrib))
+
+plot <-  ggplot(reordered_loadings_stats, aes(y = variable, x = Dim.1, fill=Dim.1_contrib)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Loadings on PC-1", y="", fill= "Contribution (%)") +
+  #theme(axis.text.x = element_text(angle = 0, hjust = 0))+
+ scale_fill_gradientn(colors=c(low="purple3", mid="#FBC85D", high="#FB645D"), limits=c(3,NA), breaks=c(3,6,9, 12,15), na.value="lightgrey", guide="colourbar")+
+  scale_x_continuous(breaks=c(-1,-0.5,0,0.5,1))+
+  theme(panel.grid.minor = element_blank(), panel.grid.major.x = element_line(colour="lightgrey", linewidth = 0.4, linetype = "dashed"), panel.grid.major.y = element_blank(), legend.position = "top", legend.key.width = unit(1, "cm") ,
+        legend.title = element_text(size=22), legend.text=element_text(size=20, angle=0), axis.title=element_text(size=24), axis.text = element_text(size=20))
+
+ggsave(paste(Sys.Date(), "LG_loadings_contribution_quanti_var_PC1_MFA_stats.pdf"), plot, width=7, height=10)
+
+plot <-  ggplot(reordered_loadings_stats, aes(y = variable, x = Dim.2, fill=Dim.2_contrib)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(x = "Loadings on PC-2", y="",fill= "Contribution (%)") +
+  scale_fill_gradientn(colors=c(low="purple3", mid="#FBC85D", high="#FB645D"),limits = c(3,30), breaks = c(3,12,21,30), na.value = "lightgrey") +
+  theme(panel.grid.minor = element_blank(),  panel.grid.major.x = element_line(colour="lightgrey", linewidth = 0.4, linetype = "dashed"), legend.position = "top", legend.key.width = unit(1, "cm") ,panel.grid.major.y = element_blank(),
+        legend.title = element_text(size=22), legend.text=element_text(size=20), axis.title=element_text(size=24), axis.text = element_text(size=20))
+
+ggsave(paste(Sys.Date(), "LG_loadings_contribution_quanti_var_PC2_MFA_stats.pdf"), plot, width=7, height=10)
+
+```
+
+****************************
+##### Supplementary Figures 
+****************************
+#### Figure S3
+```{r Figure S3, tidy =F}
+###########
+### Figure S3A: correlation of IgG_S levels with age 
+
+graph <- ggplot(data[!is.na(data$IgG_S)&!is.na(data$Age),], aes(Age,IgG_S, colour=Group)) +geom_point() + xlab("Age") + ylab("S-IgG (O.D.)")
+(graph<-graph + geom_point(data = data[!is.na(data$IgG_S)&!is.na(data$Age),], aes(y = IgG_S), na.rm=T, shape=20, size=3) + theme_bw(base_size=16)+ 
+  expand_limits(y = max(data[!is.na(data$IgG_S)&!is.na(data$Age),"IgG_S"]) + 0.2) +  # Adjust this multiplier to control the space+
+   theme(panel.background = element_rect(fill="transparent"), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth =  0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+ geom_smooth(data=data[!is.na(data$IgG_S)&!is.na(data$Age),], method="lm",
+                                                         inherit.aes=F, mapping= aes(x=Age, y=IgG_S), fill="grey",
+                                                         color="grey2")+
+    scale_x_continuous(limits = c(0, NA),expand = c(0, 0.5)) +
+    scale_y_continuous(limits = c(0, 2.6),expand = c(0.01, 0)) +
+    scale_color_manual(values = c("#686868","#FD1B1B" ))+
+    scale_fill_manual(values=c("#686868","#FD1B1B" )))
+
+result <- cor.test(data$Age, data$IgG_S, method = "spearman")
+
+# Extract the Spearman correlation coefficient
+spearman_r <- result$estimate
+# Extract the p-value
+p_value <- result$p.value
+
+correlations <- data.frame(IgG= c(spearman_r, p_value), row.names = c("spearman_r", "p_value"))
+print(correlations)
+
+
+# Figure S3B: Correlation age and N-IgG (IgG_N)
+
+graph <- ggplot(data[!is.na(data$IgG_N)&!is.na(data$Age),], aes(Age,IgG_N, colour=Group)) +geom_point() + xlab("Age") + ylab("N-IgG (O.D.)")
+(graph<-graph + geom_point(data = data[!is.na(data$IgG_N)&!is.na(data$Age),], aes(y = IgG_N), na.rm=T, shape=20, size=3) + theme_bw(base_size=16)+ 
+  expand_limits(y = max(data[!is.na(data$IgG_S)&!is.na(data$Age),"IgG_N"]) + 0.2) +  # Adjust this multiplier to control the space+
+   theme(panel.background = element_rect(fill="transparent"), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth =  0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+ geom_smooth(data=data[!is.na(data$IgG_N)&!is.na(data$Age),], method="lm",
+                                                        inherit.aes=F, mapping= aes(x=Age, y=IgG_N), fill="grey",
+                                                        color="grey2")+
+    scale_x_continuous(limits = c(0, NA),expand = c(0, 0.5)) +
+    scale_y_continuous(limits = c(0, NA),expand = c(0.01, 0)) +
+    scale_color_manual(values = c("#686868","#FD1B1B" ))+
+    scale_fill_manual(values=c("#686868","#FD1B1B" )))
+
+result <- cor.test(data$Age, data$IgG_N, method = "spearman")
+
+# Extract the Spearman correlation coefficient
+spearman_r <- result$estimate
+p_value <- result$p.value
+
+#ggsave(paste(Sys.Date(), "LG_correlation_age_IgG_N.pdf"), graph, width= 6, height=5)
+
+##################
+
+# Figure S3C: Correlation age and ORF8-IgG (IgG_ORF8)
+
+graph <- ggplot(data[!is.na(data$IgG_ORF8)&!is.na(data$Age),], aes(Age,IgG_ORF8, colour=Group)) +geom_point() + xlab("Age") + ylab("ORF8-IgG (O.D.)")
+(graph<-graph + geom_point(data = data[!is.na(data$IgG_ORF8)&!is.na(data$Age),], aes(y = IgG_ORF8), na.rm=T, shape=20, size=3)+
+    theme_bw(base_size=16)+ 
+    theme(panel.background = element_rect(fill="transparent"), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth =  0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+ geom_smooth(data=data[!is.na(data$IgG_ORF8)&!is.na(data$Age),], method="lm",
+                                                         inherit.aes=F, mapping= aes(x=Age, y=IgG_ORF8), fill="grey",
+                                                         color="grey2")+
+    scale_x_continuous(limits = c(0, NA),expand = c(0, 0.5)) +
+    scale_y_continuous(limits = c(0, 4),expand = c(0.01, 0), breaks=(c(0,1,2,3,4))) +
+    scale_color_manual(values = c("#686868","#FD1B1B" ))+
+    scale_fill_manual(values=c("#686868","#FD1B1B" )))
+
+result <- cor.test(data$Age, data$IgG_ORF8, method = "spearman")
+
+# Extract the Spearman correlation coefficient
+spearman_r <- result$estimate
+p_value <- result$p.value
+
+##################
+# Figure S3D: Correlation age and OC43-IgG (IgG_OC43)
+
+graph <- ggplot(data[!is.na(data$IgG_OC43)&!is.na(data$Age),], aes(Age,IgG_OC43, colour=Group)) +geom_point() + xlab("Age") + ylab("OC43-IgG (O.D.)")
+(graph<-graph + geom_point(data = data[!is.na(data$IgG_OC43)&!is.na(data$Age),], aes(y = IgG_OC43), na.rm=T, shape=20, size=3) + theme_bw(base_size=16)+ 
+  expand_limits(y = max(data[!is.na(data$IgG_OC43)&!is.na(data$Age),"IgG_OC43"]) + 0.1) +  # Adjust this multiplier to control the space+
+   theme(panel.background = element_rect(fill="transparent"), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth =  0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+        axis.title = element_text(size=25))+ geom_smooth(data=data[!is.na(data$IgG_OC43)&!is.na(data$Age),], method="lm",
+                                                         inherit.aes=F, mapping= aes(x=Age, y=IgG_OC43), fill="grey",
+                                                         color="grey2")+
+    scale_x_continuous(limits = c(0, NA),expand = c(0, 0.5)) +
+    scale_y_continuous(limits = c(0, 2.5),expand = c(0.01, 0), breaks=(c(0, 0.5, 1.5, 2.5, 3.5))) +
+    scale_color_manual(values = c("#686868","#FD1B1B" ))+
+    scale_fill_manual(values=c("#686868","#FD1B1B" )))
+
+result <- cor.test(data$Age, data$IgG_OC43, method = "spearman")
+
+spearman_r <- result$estimate
+p_value <- result$p.value
+
+#ggsave(paste(Sys.Date(), "LG_correlation_age_IgG_OC43.pdf"), graph, width= 6, height=5)
+```
+
+
+#### Figure S4
+```{r Figure S4, tidy =F}
+#########################
+### S4A ratio of IgG/IgM for OC43
+
+data$ratio_OC43 <- data$IgG_OC43/data$IgM_OC43
+data$log_ratio_OC43 <- log(data$ratio_OC43, 10)
+
+data%>% 
+  filter (!is.na(ratio_OC43))%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time = max(Time))
+  # Max for children is 138
+
+data%>% 
+  filter (!is.na(ratio_OC43)& Time <=138)%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no) )
+
+point_colors <- c("Adults" = "#686868", "Children" = "#FD1B1B" )
+
+model.1 <- gam(log_ratio_OC43~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data = data[data$Time<=138&!is.na(data$log_ratio_OC43), ], method = "REML") 
+model.2 <- gam(log_ratio_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group, data = data[data$Time<=138&!is.na(data$log_ratio_OC43), ], method = "REML")
+model.3 <- gam(log_ratio_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data=data[data$Time<=138&!is.na(data$log_ratio_OC43), ] , method = "REML")
+model.4 <- gam(log_ratio_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$log_ratio_OC43), ], method = "REML") 
+  
+AIC(model.1, model.2, model.3, model.4) # smallest is 1
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.1, model.2, test ="Chisq")
+anova(model.2, model.4, test ="Chisq")
+anova(model.3, model.4, test ="Chisq")
+anova(model.1, model.4, test ="Chisq")
+
+# Choose model 4 
+model <- model.4
+summary(model)
+coeff <-model$coefficients
+percent_change <- (10^(coeff[2])-1)*100
+print(percent_change)
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr =plot$fv$fit-plot$fv$CI,
+                       upr = plot$fv$fit+plot$fv$CI)
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$log_ratio_OC43), ], aes(Time,log_ratio_OC43, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("OC43-IgG/IgM ratio")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$log_ratio_OC43), ], aes(y = log_ratio_OC43), na.rm=T, shape=20, size=3 ) +
+    theme_bw(base_size=16)+
+    theme(panel.background = element_rect(fill="transparent"), 
+          panel.border = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+          axis.text = element_text(size=24), 
+          axis.title = element_text(size=25), 
+          legend.position = "none")+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey") + # Add dashed line at y = 0
+    scale_x_continuous(limits = c(0, 145), expand = c(0.0001, 0.01),breaks = seq(0, 140, by = 20) ) +
+    scale_y_continuous( breaks = seq(-2,3, by=1),  labels = scales::label_parse()(c( "10^-2", "10^-1", "10^0", "10^1", "10^2", "10^3")))+ # Use scientific labels)+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax =upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_ratio_OC43_gam.pdf"), graph, width= 6, height=5)
+
+##################
+### S4B: ratio of IgG/IgM for ORF8
+data$ratio_ORF8 <- data$IgG_ORF8/data$IgM_ORF8
+data$log_ratio_ORF8 <- log(data$ratio_ORF8, 10)
+write.xlsx(data%>% filter(!is.na(ratio_ORF8),Time<=138)%>% dplyr::select(Hospital_no, ID,Age,Group, Symptoms, Time,IgG_ORF8, IgM_ORF8, ratio_ORF8), "Source_Data.xlsx", append=T, sheetName = "Figure_S4B")
+
+data%>% 
+  filter (!is.na(ratio_ORF8))%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time = max(Time))
+  # Max for children is 138 so select Time under 138 days
+
+data%>% 
+  filter (!is.na(ratio_ORF8)& Time<=138)%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time = max(Time))
+
+point_colors <- c("Adults" = "#686868", "Children" = "#FD1B1B" )
+
+model.1 <- gam(log_ratio_ORF8~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group, data = data[data$Time<=138&!is.na(data$log_ratio_ORF8), ], method = "REML") 
+model.2 <- gam(log_ratio_ORF8 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Group, data = data[data$Time<=138&!is.na(data$log_ratio_ORF8), ], method = "REML")
+model.3 <- gam(log_ratio_ORF8 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Symptoms+Group, data=data[data$Time<=138&!is.na(data$log_ratio_ORF8), ] , method = "REML")
+model.4 <- gam(log_ratio_ORF8 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$log_ratio_ORF8), ], method = "REML") 
+  
+AIC(model.1, model.2, model.3, model.4) # smallest is 2
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.1, model.2, test ="Chisq")
+anova(model.2, model.4, test ="Chisq")
+anova(model.3, model.4, test ="Chisq")
+anova(model.1, model.4, test ="Chisq")
+
+# Choose model 4
+model <- model.4
+summary(model)
+coeff <-model$coefficients
+percent_change <- (10^(coeff[2])-1)*100
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr =plot$fv$fit-plot$fv$CI,
+                       upr = plot$fv$fit+plot$fv$CI)
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$log_ratio_ORF8), ], aes(Time,log_ratio_ORF8, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("ORF8-IgG/IgM ratio")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$log_ratio_ORF8), ], aes(y = log_ratio_ORF8), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25))+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey") + # Add dashed line at y = 0
+    scale_x_continuous(limits = c(0, 145), expand = c(0.0001, 0.01),breaks = seq(0, 140, by = 20) ) +
+    scale_y_continuous( breaks = seq(-2,3, by=1),  labels = scales::label_parse()(c( "10^-2", "10^-1", "10^0", "10^1", "10^2", "10^3")))+ # Use scientific labels)+
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax =upr), alpha = 0.2, fill = "#FD1B1B")) 
+    
+#ggsave(paste(Sys.Date(), "LG_longitudinal_ratioORF8_gam.pdf"), graph, width= 6, height=5)
+```
+
+
+## Figure S5: IgM
+```{r, tidy =F}
+### S5G: S-IgM 
+
+
+data%>% group_by(Group)%>% filter(!is.na(IgM_S)) %>%summarise(max(Time)) # 138 days max for children
+  data%>% 
+  filter (!is.na(IgM_S), Time <=138)%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time=max(Time))
+  
+write.xlsx(data%>% filter(!is.na(IgM_S),Time<=138)%>% dplyr::select(Hospital_no, ID,Age,Group, Symptoms, Time,IgM_S, IgM_N, IgM_ORF8, IgM_OC43, Total_IgM, IgM_RSVF_OD), "Source_Data.xlsx", append=T, sheetName = "Figure_S5GHIJKL")
+
+model.1 <- gam(IgM_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=138&!is.na(data$IgM_S),], method = "REML") 
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+
+ # with less variables 
+model.2 <- gam(IgM_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=138&!is.na(data$IgM_S),], method = "REML")
+model.3 <- gam(IgM_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=138&!is.na(data$IgM_S),], method = "REML")
+model.4 <- gam(IgM_S ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$IgM_S),], method = "REML") # lower AIC
+  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.4, model.1, test="Chisq")
+anova(model.4, model.2, test="Chisq")
+anova(model.4, model.3, test="Chisq")
+
+# similar, keep less variables
+
+model <-  model.4
+summary(model)
+coeff <-model$coefficients
+percent_change <- coeff[2]/coeff[1]*100
+print(percent_change)
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$IgM_S),], aes(Time,IgM_S, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("S-IgM (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgM_S),], aes(y = IgM_S), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25))+
+  scale_color_manual(values = c("#686868","#FD1B1B" )) +
+ scale_x_continuous(limits = c(0, 150), breaks = seq(0, 140, by = 20), expand=c(0,0)) +
+  scale_y_continuous(limits = c(0, NA), breaks=seq(0,2.5,by=0.5)) +
+    theme(legend.position = "none")+
+geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_IgM_S_gam.pdf"), graph, width= 6, height=5)
+
+
+#############
+# S5H: N-IgM
+
+data%>% group_by(Group)%>% filter(!is.na(IgM_N)) %>%summarise(max(Time)) # 138 days max for children
+  data%>% 
+  filter (!is.na(IgM_N), Time <=138)%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time=max(Time))
+
+model.1 <- gam(IgM_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=138&!is.na(data$IgM_N),], method = "REML") 
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+ 
+ # with less variables 
+model.2 <- gam(IgM_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=138&!is.na(data$IgM_N),], method = "REML")
+model.3 <- gam(IgM_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=138&!is.na(data$IgM_N),], method = "REML")
+model.4 <- gam(IgM_N ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$IgM_N),], method = "REML") # lower AIC
+  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.4, model.1, test="Chisq")
+lrtest(model.4, model.1)
+anova(model.2, model.1, test="Chisq")
+anova(model.2, model.4, test="Chisq")
+lrtest(model.2, model.1)
+anova(model.3, model.1, test="Chisq")
+lrtest(model.3, model.1) #same
+anova(model.3, model.4, test="Chisq")
+lrtest(model.3, model.4) #3 is better
+
+# Model 3 seems to fit the best
+model <-  model.3
+summary(model)
+coeff <-model$coefficients
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+coeff[3]/coeff[1]*100
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$IgM_N),], aes(Time,IgM_N, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("N-IgM (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgM_N),], aes(y = IgM_N), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25),
+       legend.position = "none")+
+  scale_color_manual(values = c("#686868","#FD1B1B" )) +
+  scale_x_continuous(limits = c(0, 150), breaks = seq(0, 140, by = 20), expand=c(0,0)) +
+  scale_y_continuous(limits = c(0, NA), breaks=seq(0,2.5,by=0.5)) +
+  geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_IgM_N_gam.pdf"), graph, width= 6, height=5)
+
+#############
+# S5I: ORF8-IgM
+data%>% group_by(Group)%>% filter(!is.na(IgM_ORF8)) %>%summarise(max(Time)) # 138 days max for children
+  data%>% 
+  filter (!is.na(IgM_ORF8), Time <=138)%>% 
+  group_by(Group)%>% 
+  summarise(samples = n(), unique = n_distinct(Hospital_no), max_time=max(Time))
+  
+model.1 <- gam(IgM_ORF8 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=138&!is.na(data$IgM_ORF8),], method = "REML") 
+
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+ 
+ # with less variables 
+model.2 <- gam(IgM_ORF8 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=138&!is.na(data$IgM_ORF8),], method = "REML")
+model.3 <- gam(IgM_ORF8 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=138&!is.na(data$IgM_ORF8),], method = "REML")
+model.4 <- gam(IgM_ORF8 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$IgM_ORF8),], method = "REML") # lower AIC
+  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.2, model.1, test="Chisq")
+lrtest(model.2, model.1)
+anova(model.1, model.4, test="Chisq") # not significant
+lrtest(model.1, model.4)
+anova(model.4, model.2, test="Chisq") # not significant
+lrtest(model.4, model.2)
+anova(model.4, model.3, test="Chisq") # not significant
+lrtest(model.4, model.3)
+
+# Model 1 or 2 not significantly better so keep 4
+
+model <-  model.4
+summary(model)
+coeff <-model$coefficients
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$IgM_ORF8),], aes(Time,IgM_ORF8, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("ORF8-IgM (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgM_ORF8),], aes(y = IgM_ORF8), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25))+
+  scale_color_manual(values = c("#686868","#FD1B1B" )) +
+ scale_x_continuous(limits = c(0, 150), breaks = seq(0, 140, by = 20), expand=c(0,0)) +
+  scale_y_continuous(limits = c(0, NA), breaks=seq(0,2.5,by=0.5)) +
+    theme(legend.position = "none")+
+geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_IgM_ORF8_gam.pdf"), graph, width= 6, height=5)
+
+#############
+# S5J: OC43-IgM
+data%>% group_by(Group)%>% filter(!is.na(IgM_OC43)) %>%summarise(max(Time)) # 138 days max for children
+data%>% group_by(Group)%>% filter(!is.na(IgM_OC43), Time<=138) %>%summarise(n(), uniaue=n_distinct(Hospital_no))  
+
+model.1 <- gam(IgM_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=138&!is.na(data$IgM_OC43),], method = "REML") 
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+ 
+ # with less variables 
+model.2 <- gam(IgM_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=138&!is.na(data$IgM_OC43),], method = "REML")
+model.3 <- gam(IgM_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=138&!is.na(data$IgM_OC43),], method = "REML")
+model.4 <- gam(IgM_OC43 ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$IgM_OC43),], method = "REML") # lower AIC
+  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.2, model.1, test="Chisq")
+lrtest(model.2, model.1)
+anova(model.1, model.4, test="Chisq")
+lrtest(model.1, model.4) #model 1
+anova(model.4, model.2, test="Chisq")
+lrtest(model.4, model.2)
+
+# Model 4 is better
+
+model <-  model.4
+summary(model)
+coeff <-model$coefficients
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$IgM_OC43),], aes(Time,IgM_OC43, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("OC43-IgM (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgM_OC43),], aes(y = IgM_OC43), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25),
+       legend.position = "none")+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 150), breaks = seq(0, 140, by = 20), expand=c(0,0)) +
+    scale_y_continuous(limits = c(0, NA), breaks=seq(0,2.5,by=0.5)) +
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+    geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+    geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_IgM_OC43_gam.pdf"), graph, width= 6, height=5)
+
+#############
+# S5K: Total IgM
+
+data%>% group_by(Group)%>% filter(!is.na(Total_IgM)) %>%summarise(max(Time)) # 138 days max for children
+data%>% group_by(Group)%>% filter(!is.na(Total_IgM), Time<=138) %>%summarise(n(), n_distinct(Hospital_no)) # 138 days max for children
+
+model.1 <- gam(Total_IgM ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=138&!is.na(data$Total_IgM),], method = "REML") 
+
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+ 
+ # with less variables 
+model.2 <- gam(Total_IgM ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=138&!is.na(data$Total_IgM),], method = "REML")
+model.3 <- gam(Total_IgM ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=138&!is.na(data$Total_IgM),], method = "REML")
+model.4 <- gam(Total_IgM ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=138&!is.na(data$Total_IgM),], method = "REML") # lower AIC
+  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.2, model.1, test="Chisq")
+lrtest(model.2, model.1)
+anova(model.1, model.4, test="Chisq")
+anova(model.4, model.2, test="Chisq")
+lrtest(model.1, model.4) #model 1 better
+anova(model.4, model.2, test="Chisq")
+
+# Model 4 is better
+
+model <-  model.4
+summary(model)
+
+coeff <-model$coefficients
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$Total_IgM),], aes(Time,Total_IgM, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("Total IgM (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$Total_IgM),], aes(y = Total_IgM), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25))+
+    scale_color_manual(values = c("#686868","#FD1B1B" )) +
+    scale_x_continuous(limits = c(0, 150), breaks = seq(0, 140, by = 20), expand=c(0,0)) +
+    scale_y_continuous(limits = c(0, NA), breaks=seq(0,2.5,by=0.5)) +
+    theme(legend.position = "none")+
+    geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_Total_IgM_gam.pdf"), graph, width= 6, height=5)
+
+#############
+#S5L: RSV-IgM
+
+data%>% group_by(Group)%>% filter(!is.na(IgM_RSVF_OD)) %>%summarise(max(Time)) # 131 days max for children
+data%>% group_by(Group)%>% filter(!is.na(IgM_RSVF_OD), Time<=131) %>%summarise(n(), n_distinct(Hospital_no)) # 131 days max for children  
+
+model.1 <- gam(IgM_RSVF_OD ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Sex+Symptoms+Group,data = data[data$Time<=131&!is.na(data$IgM_RSVF_OD),], method = "REML") 
+
+summary(model.1)
+plot(model.1)
+gam.check(model.1)
+ 
+ # with less variables 
+model.2 <- gam(IgM_RSVF_OD ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Sex, data = data[data$Time<=131&!is.na(data$IgM_RSVF_OD),], method = "REML")
+model.3 <- gam(IgM_RSVF_OD ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group+Symptoms, data = data[data$Time<=131&!is.na(data$IgM_RSVF_OD),], method = "REML")
+model.4 <- gam(IgM_RSVF_OD ~ s(Time, by = Group) + s(Hospital_no, bs = "re")+Group, data = data[data$Time<=131&!is.na(data$IgM_RSVF_OD),], method = "REML") # lower AIC
+  
+AIC(model.1, model.2, model.3, model.4)
+
+gam.check(model.1)
+gam.check(model.2)
+gam.check(model.3)
+gam.check(model.4)
+
+anova(model.2, model.1, test="Chisq")
+lrtest(model.2, model.1)
+anova(model.1, model.4, test="Chisq")
+lrtest(model.1, model.4)
+anova(model.4, model.2, test="Chisq")
+lrtest(model.4, model.2)
+
+# Model 4 is better
+
+model <-  model.4
+summary(model)
+coeff <-model$coefficients
+percent_change <- coeff[2]/coeff[1]*100
+percent_change
+
+plot <- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Adults"), col = "#686868", n.grid=150)
+
+fit_data_adults <- data.frame(Time = plot$fv$Time, 
+                       fit = plot$fv$fit, 
+                       lwr = plot$fv$fit-plot$fv$CI, 
+                       upr = plot$fv$fit+plot$fv$CI)
+fit_data_adults$lwr[fit_data_adults$lwr<0] <- 0
+
+
+plot_children<- plot_smooth(model,  view = "Time", rm.ranef = TRUE, cond = list(Group = "Children"), n.grid=150)
+fit_data_children <- data.frame(Time = plot_children$fv$Time, 
+                       fit = plot_children$fv$fit, 
+                       lwr = plot_children$fv$fit-plot_children$fv$CI, 
+                       upr = plot_children$fv$fit+plot_children$fv$CI)
+fit_data_children$lwr[fit_data_children$lwr<0] <- 0
+
+graph <- ggplot(data[data$Time<=131&!is.na(data$IgM_RSVF_OD),], aes(Time,IgM_RSVF_OD, colour=Group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("RSV-IgM (O.D.)")
+(graph<-graph + geom_point(data = data[data$Time<=131&!is.na(data$IgM_RSVF_OD),], aes(y = IgM_RSVF_OD), na.rm=T, shape=20, size=3 ) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), 
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(linewidth = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=24), 
+       axis.title = element_text(size=25))+
+  scale_color_manual(values = c("#686868","#FD1B1B" )) +
+ scale_x_continuous(limits = c(0, 140), breaks = seq(0, 135, by = 45), expand=c(0,0)) +
+  scale_y_continuous(limits = c(0, NA), breaks=seq(0,2.5,by=0.5)) +
+    theme(legend.position = "none")+
+geom_line(data = fit_data_adults, aes(y = fit), color = "#686868", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_adults, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#686868") + # Add confidence interval
+geom_line(data = fit_data_children, aes(y = fit), color = "#FD1B1B", size = 1) + # Add fitted line
+  geom_ribbon(inherit.aes =FALSE,data = fit_data_children, aes(x=Time, ymin = lwr, ymax = upr), alpha = 0.2, fill = "#FD1B1B")) 
+
+#ggsave(paste(Sys.Date(), "LG_longitudinal_IgM_RSVF_OD_gam.pdf"), graph, width= 6, height=5)
+```
+
+
+## Figure S6
+```{r Figure S6, tidy =F}
+
+### S6A: S-IgG
+data$sympt_group <-as.factor(paste(data$Group,data$Symptoms))
+line_types <- c("Adults S" = "solid", "Children S" = "solid", "Adults AS" = "dashed", "Children AS" = "dashed")
+curve_colors <- c("Adults S" = "#686868", "Children S" = "#FD1B1B" , "Adults AS" = "#686868", "Children AS" = "#FD1B1B" )
+point_colors <- c("Adults S" = "#686868", "Children S" = "#FD1B1B" , "Adults AS" = "#ACACAC", "Children AS" = "#FA666B")
+shapes <- c("Adults S" = 16, "Children S" = 16 , "Adults AS" = 17, "Children AS" = 17)
+
+
+graph <- ggplot(data[data$Time<=180&!is.na(data$IgG_S), ], aes(Time,IgG_S, colour=sympt_group, linetype = sympt_group, shape=sympt_group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("S-IgG (OD)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgG_S), ], aes(y = IgG_S, shape = sympt_group), na.rm=T,  size=2) + theme_bw(base_size=16)+
+   theme(panel.background = element_blank(), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=22), 
+       axis.title = element_text(size=23))+
+    scale_linetype_manual(values = line_types) +
+    scale_shape_manual(values = shapes)+
+   scale_x_continuous(limits = c(0, 185),expand = c(0, 3),  breaks= seq(0,180, by=30)) +
+    scale_y_continuous(limits = c(0, NA), expand = c(0.01, 0.01)) +
+    scale_color_manual(values = point_colors) +
+    new_scale_color() +
+     stat_smooth(method = "loess", se = TRUE, fullrange = FALSE,alpha=0.15, span=0.75, aes(ymin = pmax(..ymin.., 0), fill=sympt_group,color=sympt_group))+
+    scale_color_manual( values = curve_colors) +
+  scale_fill_manual(values=c("#CDCDCD","#686868","#F59992","#FD1B1B" )))
+
+ #ggsave(paste(Sys.Date(), "LG_longitudinal_IgG_S_under_180days_symptoms.pdf"), graph, width= 6, height=5)
+ 
+### S6B: N-IgG 
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$IgG_N), ], aes(Time,IgG_N, colour=sympt_group, linetype = sympt_group, shape=sympt_group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("N-IgG (OD)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgG_N), ], aes(y = IgG_N, shape = sympt_group), na.rm=T,  size=2) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=22), 
+       axis.title = element_text(size=23))+
+    scale_linetype_manual(values = line_types) +
+    scale_shape_manual(values = shapes)+
+   scale_x_continuous(limits = c(0, 145),expand = c(0, 3), breaks= seq(0,140,by=20)) +
+    scale_y_continuous(limits = c(0, NA), expand = c(0.01, 0.01)) +
+    scale_color_manual(values = point_colors) +
+    new_scale_color() +
+     stat_smooth(method = "loess", se = TRUE, fullrange = FALSE,alpha=0.15, span=0.75, aes(ymin = pmax(..ymin.., 0), fill=sympt_group,color=sympt_group))+
+    scale_color_manual( values = curve_colors) +
+  scale_fill_manual(values=c("#CDCDCD","#686868","#F59992","#FD1B1B" )))
+
+ #ggsave(paste(Sys.Date(), "LG_longitudinal_IgG_N_under_138days_symptoms.pdf"), graph, width= 6, height=5)
+ 
+ ### S6C: ORF8-IgG
+write.xlsx(data%>% filter(Time<=138,!is.na(IgG_ORF8))%>% dplyr::select(Hospital_no, ID,Age,Group, Symptoms, Time,IgG_ORF8),"Source_Data.xlsx", append=T, sheetName = "Figure_S6C", showNA=F)
+
+graph <- ggplot(data[data$Time<=138&!is.na(data$IgG_ORF8), ], aes(Time,IgG_ORF8, colour=sympt_group, linetype = sympt_group, shape=sympt_group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("ORF8-IgG (OD)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgG_ORF8), ], aes(y = IgG_ORF8,shape = sympt_group), na.rm=T,  size=2) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=22), 
+       axis.title = element_text(size=23))+
+    scale_linetype_manual(values = line_types) +
+    scale_shape_manual(values = shapes)+
+    scale_x_continuous(limits = c(0, 145),expand = c(0, 3), breaks= seq(0,140,by=20)) +
+    scale_y_continuous(limits = c(0, NA), expand = c(0.01, 0.01)) +
+    scale_color_manual(values = point_colors) +
+    new_scale_color() +
+    stat_smooth(method = "loess", se = TRUE, fullrange = FALSE,alpha=0.15, span=0.75, aes(ymin = pmax(..ymin.., 0), fill=sympt_group,color=sympt_group))+
+    scale_color_manual( values = curve_colors) +
+  scale_fill_manual(values=c("#CDCDCD","#686868","#F59992","#FD1B1B")))
+
+ #ggsave(paste(Sys.Date(), "LG_longitudinal_IgG_ORF8_under_138days_symptoms.pdf"), graph, width= 6, height=5)
+ 
+ ###S6D: OC43-IgG
+write.xlsx(data%>% filter(Time<=138,!is.na(IgG_OC43))%>% dplyr::select(Hospital_no, ID,Age,Group, Symptoms, Time,IgG_OC43),"Source_Data.xlsx", append=T, sheetName = "Figure_S6D", showNA=F)
+
+ graph <- ggplot(data[data$Time<=138&!is.na(data$IgG_OC43), ], aes(Time,IgG_OC43, colour=sympt_group, linetype = sympt_group, shape=sympt_group)) +geom_point() + xlab("Days post onset of symptoms") + ylab("OC43-IgG (OD)")
+(graph<-graph + geom_point(data = data[data$Time<=138&!is.na(data$IgG_OC43), ], aes(y = IgG_OC43,shape = sympt_group), na.rm=T,  size=2) + theme_bw(base_size=16)+
+   theme(panel.background = element_rect(fill="transparent"), legend.position = "none",
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(size = 0.5, linetype = "solid",colour = "black"), 
+        axis.text = element_text(size=22), 
+       axis.title = element_text(size=23))+
+    scale_linetype_manual(values = line_types) +
+    scale_shape_manual(values = shapes)+
+   scale_x_continuous(limits = c(0, 145),expand = c(0, 3), breaks= seq(0,140,by=20)) +
+    scale_y_continuous(limits = c(0, NA), expand = c(0.01, 0.01)) +
+    scale_color_manual(values = point_colors) +
+    new_scale_color() +
+     stat_smooth(method = "loess", se = TRUE, fullrange = FALSE,alpha=0.15, span=0.75, aes(ymin = pmax(..ymin.., 0),
+                                                                                           fill=sympt_group,color=sympt_group))+
+    scale_color_manual( values = curve_colors) +  scale_fill_manual(values=c("#CDCDCD","#686868","#F59992","#FD1B1B" )))
+
+ #ggsave(paste(Sys.Date(), "LG_longitudinal_IgG_OC43_under_138days_symptoms.pdf"), graph, width= 6, height=5)
+
+```
+
+
+### Supplementary Figure 9
+```{r rquery.cormat, tidy =F}
+#########
+rquery.cormat<-function(x, type=c('lower', 'upper', 'full', 'flatten'),
+                        graph=TRUE, graphType=c("correlogram", "heatmap"),
+                        col=NULL,plot_name,...)
+{
+  library(corrplot)
+  # Helper functions
+  #+++++++++++++++++
+  # Compute the matrix of correlation p-values
+  cor.pmat <- function(x, ...) {
+    mat <- as.matrix(x)
+    n <- ncol(mat)
+    p.mat<- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    for (i in 1:(n - 1)) {
+      for (j in (i + 1):n) {
+        tmp <- cor.test(mat[, i], mat[, j], method="spearman",...)
+        p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+      }
+    }
+    colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+    p.mat
+  }
+  # Get lower triangle of the matrix
+  getLower.tri<-function(mat){
+    upper<-mat
+    upper[upper.tri(mat)]<-""
+    mat<-as.data.frame(upper)
+    mat
+  }
+  # Get upper triangle of the matrix
+  getUpper.tri<-function(mat){
+    lt<-mat
+    lt[lower.tri(mat)]<-""
+    mat<-as.data.frame(lt)
+    mat
+  }
+  # Get flatten matrix
+  flattenCorrMatrix <- function(cormat, pmat) {
+    ut <- upper.tri(cormat)
+    data.frame(
+      row = rownames(cormat)[row(cormat)[ut]],
+      column = rownames(cormat)[col(cormat)[ut]],
+      cor  =(cormat)[ut],
+      p = pmat[ut]
+    )
+  }
+  # Define color
+  if (is.null(col)) {
+    col <- colorRampPalette(c("#67001F", "#B2182B", "#D6604D", 
+                              "#F4A582", "#FDDBC7", "#FFFFFF", "#D1E5F0", "#92C5DE", 
+                              "#4393C3", "#2166AC", "#053061"))(200)
+    col<-rev(col)
+  }
+  
+  # Correlation matrix
+  cormat<-signif(cor(x, use = "pairwise.complete.obs",...),2)
+  
+  pmat<-signif(cor.pmat(x, ...),2)
+  # Reorder correlation matrix, not for the kids 
+  ord<-corrMatOrder(cormat, order="hclust")
+  cormat<-cormat[ord, ord]
+  pmat<-pmat[ord, ord]
+  # Replace correlation coeff by symbols
+  sym<-symnum(cormat, abbr.colnames=FALSE)
+  # Correlogram
+  
+  if(graph & graphType[1]=="correlogram"){
+    #pdf(paste0(Sys.Date(),"_", plot_name,".pdf" ), width=12, height = 12)
+    corrplot(cormat, type=ifelse(type[1]=="flatten", "lower", type[1]),
+             tl.col="black", tl.srt=90,tl.cex=1.6,col=col,p.mat= pmat, sig.level = c(.001, .01, .05), 
+             insig="label_sig", pch.cex =1.3, pch.col = "black",cl.cex=2,...)
+   # dev.off()
+      
+  }
+  else if(graphType[1]=="heatmap")
+    heatmap(cormat, col=col, symm=TRUE)
+  # Get lower/upper triangle
+  if(type[1]=="lower"){
+    cormat<-getLower.tri(cormat)
+    pmat<-getLower.tri(pmat)
+  }
+  else if(type[1]=="upper"){
+    cormat<-getUpper.tri(cormat)
+    pmat<-getUpper.tri(pmat)
+    sym=t(sym)
+  }
+  else if(type[1]=="flatten"){
+    cormat<-flattenCorrMatrix(cormat, pmat)
+    pmat=NULL
+    sym=NULL
+  }
+  list(r=cormat, p=pmat, sym=sym)
+}
+
+####
+rquery.cormat_kids<-function(x, type=c('lower', 'upper', 'full', 'flatten'),
+                        graph=TRUE, graphType=c("correlogram", "heatmap"),
+                        col=NULL,plot_name,...)
+{
+  library(corrplot)
+  # Helper functions
+  #+++++++++++++++++
+  # Compute the matrix of correlation p-values
+  cor.pmat <- function(x, ...) {
+    mat <- as.matrix(x)
+    n <- ncol(mat)
+    p.mat<- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    for (i in 1:(n - 1)) {
+      for (j in (i + 1):n) {
+        tmp <- cor.test(mat[, i], mat[, j], method="spearman",...)
+        p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+      }
+    }
+    colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+    p.mat
+  }
+  # Get lower triangle of the matrix
+  getLower.tri<-function(mat){
+    upper<-mat
+    upper[upper.tri(mat)]<-""
+    mat<-as.data.frame(upper)
+    mat
+  }
+  # Get upper triangle of the matrix
+  getUpper.tri<-function(mat){
+    lt<-mat
+    lt[lower.tri(mat)]<-""
+    mat<-as.data.frame(lt)
+    mat
+  }
+  # Get flatten matrix
+  flattenCorrMatrix <- function(cormat, pmat) {
+    ut <- upper.tri(cormat)
+    data.frame(
+      row = rownames(cormat)[row(cormat)[ut]],
+      column = rownames(cormat)[col(cormat)[ut]],
+      cor  =(cormat)[ut],
+      p = pmat[ut]
+    )
+  }
+  # Define color
+  if (is.null(col)) {
+    col <- colorRampPalette(c("#67001F", "#B2182B", "#D6604D", 
+                              "#F4A582", "#FDDBC7", "#FFFFFF", "#D1E5F0", "#92C5DE", 
+                              "#4393C3", "#2166AC", "#053061"))(200)
+    col<-rev(col)
+  }
+  
+  # Correlation matrix
+  cormat<-signif(cor(x, use = "pairwise.complete.obs",...),2)
+  
+  pmat<-signif(cor.pmat(x, ...),2)
+  # Reorder correlation matrix, not for the kids 
+  #ord<-corrMatOrder(cormat, order="hclust")
+  #cormat<-cormat[ord, ord]
+  #pmat<-pmat[ord, ord]
+  # Replace correlation coeff by symbols
+  sym<-symnum(cormat, abbr.colnames=FALSE)
+  # Correlogram
+  
+  if(graph & graphType[1]=="correlogram"){
+    #pdf(paste0(Sys.Date(),"_", plot_name,".pdf" ), width=12, height=12)
+    corrplot(cormat, type=ifelse(type[1]=="flatten", "lower", type[1]),
+             tl.col="black", tl.srt=90,tl.cex=1.6,col=col,p.mat= pmat, sig.level = c(.001, .01, .05), 
+             insig="label_sig", pch.cex =1.3, pch.col = "black",cl.cex=2,...)
+    #dev.off()
+      
+  }
+  else if(graphType[1]=="heatmap")
+    heatmap(cormat, col=col, symm=TRUE)
+  # Get lower/upper triangle
+  if(type[1]=="lower"){
+    cormat<-getLower.tri(cormat)
+    pmat<-getLower.tri(pmat)
+  }
+  else if(type[1]=="upper"){
+    cormat<-getUpper.tri(cormat)
+    pmat<-getUpper.tri(pmat)
+    sym=t(sym)
+  }
+  else if(type[1]=="flatten"){
+    cormat<-flattenCorrMatrix(cormat, pmat)
+    pmat=NULL
+    sym=NULL
+  }
+  list(r=cormat, p=pmat, sym=sym)
+}
+```
+
+
+```{r, tidy =F}
+##############################
+# S9 
+labels =  c("Age", "Time", "S-IgG", "N-IgG", "ORF8-IgG", "OC43-IgG","RBD-IgG", "S1-IgG", "S2-IgG", "S-IgM", "N-IgM", "OC43-IgM", "ORF8-IgM", "RSV-IgM",  "FcγR3a", "FcγR2a","S-IgA", "N-IgA", "ORF8-IgA", "OC43-IgA","IgM total","PRNT_50","Avidity-IgG-S","Avidity-IgG-RBD", "Avidity-IgG-S1","Avidity-IgG-S2","Avidity-IgG-N", "Avidity-IgG-OC43", "Avidity-IgG-ORF8")
+
+new_labels <- c(
+  "Age", "Time", "S-IgG", "N-IgG", "ORF8\nIgG", "OC43\nIgG", 
+  "S-IgM", "N-IgM", "OC43\nIgM", "ORF8\nIgM", "RSV-IgM", 
+  "Avidity\nS", "Avidity\nN", "Avidity\nORF8", "Avidity\nOC43", 
+  expression(Fc*gamma*R[3]*a), expression(Fc*gamma*R[2]*a), 
+  "S-IgA", "N-IgA", "ORF8\nIgA", "OC43\nIgA", "IgM total"
+)
+
+colnames(adults_subset)[-c(1:4, 6, 35)] <- labels
+  
+#pdf(paste(Sys.Date(), "LG_correlogram_adults_subset.pdf"), width=12, height=12)
+correl<-rquery.cormat(adults_subset[-c(1:4, 6, 35)], type="upper", plot_name="LG_correlogram_adults_pairwise_complete")
+#dev.off()
+
+# order the children in the same order to keep comparison easy 
+kids_for_correl <- kids_subset[,-c(1:4, 6, 35)]
+colnames(kids_for_correl)<- labels
+kids_for_correl <- kids_for_correl[,colnames(correl$r)] 
+
+correl<-rquery.cormat_kids(kids_for_correl, type="upper", plot_name="LG_correlogram_kids_pairwise_complete")
+
+write.xlsx(data_subset[,-c(35)]%>%arrange(Group),"Source_Data.xlsx", append=T, sheetName = "Figure_S9", showNA=F)
+```
+
+
+# Supplementary Figure 10
+```{r PCA, tidy =F}
+###### 
+###S10A 
+
+# Define the colors used for the graphs
+colours <- c("#686868","#FD1B1B")   
+
+# Impute the data to fill missing values
+for_pca <- data_subset[,c(7:26,28:34)] # do not take age 
+imputed_data <- imputePCA(for_pca, ncp= 6)
+
+#Calculate the PCA
+pca_cat <- PCA(X=imputed_data$completeObs, scale.unit=T, graph=F,ncp=6)
+variance <- pca_cat$eig
+eig = get_eig(pca_cat)
+
+#PC 1 and 2
+plot<-fviz_pca_ind(pca_cat,
+             axes = c(1,2),
+             fill = as.factor(data_subset$Group),
+             palette = colours,
+             geom=c("point"),
+             repel=T,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",pointsize=2.5,
+             pointshape=21, height=16, xlab=paste0("PC-1 (",round(variance[1,2],2),"%)"), 
+             ylab=paste0("PC-2 (",round(variance[2,2],2),"%)"), title="" ,
+legend.title="Age category") +theme(
+  legend.text = element_text(size = 18), legend.position="none",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_text(size=18), 
+  panel.grid = element_blank(), 
+  panel.background = element_rect(fill = "transparent", linewidth =0.5),aspect.ratio=1
+)  
+plot
+ggsave(paste0(Sys.Date(), "LG_PCA_age_category_subset_PC1_2.pdf"),plot, height=12, width=12.5,unit="cm")
+
+#######################
+#PC 3 and 4 
+
+#Plot for PC 3 and 4 
+cat( "Principal components 3 and 4")
+plot<-fviz_pca_ind(pca_cat,
+             axes = c(3,4),
+             fill = as.factor(data_subset$Group),
+             pointsize=2.5,
+             palette = colours,
+             geom=c("point"),
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",
+             pointshape=21, height=16,title="",xlab=paste0("PC-3 (",round(variance[3,2],2),"%)"), 
+             ylab=paste0("PC-4 (",round(variance[4,2],2),"%)"),
+legend.title="Age category") +theme(
+  legend.text = element_text(size = 18), legend.position="none",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_text(size=18), 
+  panel.grid = element_blank(), 
+  panel.background = element_rect(fill = "transparent", linewidth =0.5),aspect.ratio=1)  
+
+plot
+ggsave(paste0(Sys.Date(), "LG_PCA_age_category_PC3_4_subset.pdf"),plot,  height=12, width=12.5,unit="cm")
+
+############
+##PC 5 and 6 
+
+
+plot<-fviz_pca_ind(pca_cat,
+             axes = c(5,6),
+             fill = as.factor(data_subset$Group),
+             palette = colours,
+             geom=c("point"),pointsize=2.5,
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",
+             pointshape=21, height=16,  title="" ,xlab=paste0("PC-5 (",round(variance[5,2],2),"%)"), 
+             ylab=paste0("PC-6 (",round(variance[6,2],2),"%)"),
+             legend.title="Age category") +theme(
+               legend.text = element_text(size = 18), legend.position="none",
+               axis.text = element_text(size = 14),
+               axis.title=element_text(size=18),
+               title=element_text(size=18), 
+  panel.grid = element_blank(),
+  panel.background = element_rect(fill = "transparent", size=0.5),aspect.ratio=1)  
+
+plot
+ggsave(paste0(Sys.Date(), "LG_PCA_age_category_PC5_6_subset.pdf"),plot, height=12, width=12.5,unit="cm")
+
+#######
+# S10B
+####### Color by symptoms
+
+##### Dim 1 and 2 
+# Extract the PCA results
+pca_scores <- pca_cat$ind$coord [,1:2]
+dist_matrix <- dist(pca_scores, method = "euclidean") #distance matrix
+group_data <- data.frame(Symptom = data_subset$Symptoms)  # should be same order as samples in `pca_scores`
+
+anosim_result <- anosim(dist_matrix, grouping = group_data$Symptom, permutations = 999)
+summary(anosim_result) # Significance: 0.812
+
+colours <- c("#1E90FF","#FFC107")   
+
+plot1<-fviz_pca_ind(pca_cat,
+             axes = c(1,2),
+             fill = as.factor(data_subset$Symptoms),
+             palette = colours,
+             geom=c("point"),
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",pointsize=2.5,
+             pointshape=21, height=16, xlab=paste0("PC-1 (",round(variance[1,2],2),"%)"), 
+             ylab=paste0("PC-2 (",round(variance[2,2],2),"%)"), title="" ,
+             legend.title="Symptoms") +theme(
+               legend.text = element_text(size = 18), legend.position="none", legend.title = element_text(size=20),
+               axis.text = element_text(size = 14),  axis.title=element_text(size=18),  title=element_text(size=14),   
+               panel.grid = element_blank(), 
+               panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1)  
+plot1
+ggsave(paste0(Sys.Date(), "LG_PCA_symptoms_category_subset_PC1_2.pdf"),plot1, height=12, width=12.5,unit="cm")
+
+
+##### Dim 3 and 4 
+# Extract the PCA results
+pca_scores <- pca_cat$ind$coord [,3:4]
+dist_matrix <- dist(pca_scores, method = "euclidean")
+
+# Run ANOSIM
+anosim_result <- anosim(dist_matrix, grouping = group_data$Symptom, permutations = 999)
+summary(anosim_result) # Significance: 0.555
+
+plot2 <- fviz_pca_ind(pca_cat,
+             axes = c(3,4),
+             fill = as.factor(data_subset$Symptoms),
+             pointsize=2.5,
+             palette = colours,
+             geom=c("point"),
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",
+             pointshape=21, height=16,title="",xlab=paste0("PC-3 (",round(variance[3,2],2),"%)"), 
+             ylab=paste0("PC-4 (",round(variance[4,2],2),"%)")) +theme(
+  legend.text = element_text(size = 18), legend.position="none",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_text(size=18), 
+  panel.grid = element_blank(), 
+  panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1)
+
+ggsave(paste0(Sys.Date(), "LG_PCA_symptoms_category_subset_PC3_4.pdf"),plot2, height=12, width=12.5,unit="cm")
+
+##### Dim 5 and 6
+# Extract the PCA results
+pca_scores <- pca_cat$ind$coord [,5:6]
+dist_matrix <- dist(pca_scores, method = "euclidean")
+
+# Run ANOSIM
+anosim_result <- anosim(dist_matrix, grouping = group_data$Symptom, permutations = 999)
+print(anosim_result)
+
+plot3 <- fviz_pca_ind(pca_cat,
+             axes = c(5,6),
+             fill = as.factor(data_subset$Symptoms),
+             pointsize=2.5,
+             palette = colours,
+             geom=c("point"),
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",
+             pointshape=21, height=16,title="",xlab=paste0("PC-5 (",round(variance[5,2],2),"%)"), 
+             ylab=paste0("PC-6 (",round(variance[6,2],2),"%)"),
+             legend.title="Age category") +
+  theme(legend.text = element_text(size = 18), legend.position="none",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_text(size=18), 
+  panel.grid = element_blank(), 
+  panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1)
+
+ggsave(paste0(Sys.Date(), "LG_PCA_symptoms_category_subset_PC5_6.pdf"),plot3, height=12, width=12.5,unit="cm")
+
+#########
+## S10C 
+
+##Coloring the PCA by sex
+##### Dim 1 and 2 
+# Extract the PCA results
+pca_scores <- pca_cat$ind$coord [,1:2]
+dist_matrix <- dist(pca_scores, method = "euclidean")
+group_data <- data.frame(Sex = data_subset$Sex)  
+
+# Run ANOSIM
+anosim_result <- anosim(dist_matrix, grouping = group_data$Sex, permutations = 999)
+# View result
+summary(anosim_result) # Significance: 0.153
+
+colours <- c("orange2","purple")  
+plot1 <- fviz_pca_ind(pca_cat,
+             axes = c(1,2),
+             fill = as.factor(data_subset$Sex),
+             palette = colours,
+             geom=c("point"),
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",pointsize=2.5,
+             pointshape=21, height=16, xlab=paste0("PC-1 (",round(variance[1,2],2),"%)"), 
+             ylab=paste0("PC-2 (",round(variance[2,2],2),"%)"), title="" ,
+             legend.title="Sex") +theme(
+  legend.text = element_text(size = 18), legend.position="none",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_text(size=18), 
+  panel.grid = element_blank(), 
+  panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1)
+
+ggsave(paste0(Sys.Date(), "LG_PCA_by_sex_PC1_2_subset.pdf"),plot1, height=12, width=12.5,unit="cm")
+
+##### Dim 3 and 4 
+# Extract the PCA results
+pca_scores <- pca_cat$ind$coord [,3:4]
+dist_matrix <- dist(pca_scores, method = "euclidean")
+
+# Run ANOSIM
+anosim_result <- anosim(dist_matrix, grouping = group_data$Sex, permutations = 999)
+summary(anosim_result) # Significance: 0.047
+
+#PC 3 and 4 
+
+#Plot for PC 3 and 4 
+cat( "Principal components 3 and 4")
+plot3<-fviz_pca_ind(pca_cat,
+             axes = c(3,4),
+             fill = as.factor(data_subset$Sex),
+             pointsize=2.5,
+             palette = colours,
+             geom=c("point"),
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",
+             pointshape=21, height=16,  title="" ,xlab=paste0("PC-3 (",round(variance[3,2],2),"%)"), 
+             ylab=paste0("PC-4 (",round(variance[4,2],2),"%)"),legend.title="Sex") +theme(
+  legend.text = element_text(size = 18), legend.position="none",
+  axis.text = element_text(size = 14),
+  axis.title=element_text(size=18),
+  title=element_text(size=18), 
+  panel.grid = element_blank(), 
+  panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1)
+
+ggsave(paste0(Sys.Date(), "LG_PCA_by_sex_PC3_4_subset.pdf"),plot3, height=12, width=12.5,unit="cm")
+
+
+
+############
+##### Dim  5 and 6 
+# Extract the PCA results
+pca_scores <- pca_cat$ind$coord [,5:6]
+dist_matrix <- dist(pca_scores, method = "euclidean")
+
+# Run ANOSIM
+anosim_result <- anosim(dist_matrix, grouping = group_data$Sex, permutations = 999)
+summary(anosim_result) # Significance: 0.081
+
+##PC 5 and 6 
+
+#Plot for PC 5 and 6 
+cat( "Principal components 4 and 5")
+plot4<-fviz_pca_ind(pca_cat,
+             axes = c(5,6),
+             fill = as.factor(data_subset$Sex),
+             palette = colours,
+             geom=c("point"),pointsize=2.5,
+             repel=F,
+             addEllipses = T,ellipse.level=0.95, ellipse.type="norm",
+             pointshape=21, height=16,  title="" ,xlab=paste0("PC-5 (",round(variance[5,2],2),"%)"), 
+             ylab=paste0("PC-6 (",round(variance[6,2],2),"%)"),legend.title="Sex") +theme(
+               legend.text = element_text(size = 18), legend.position="none",
+               axis.text = element_text(size = 14),
+               axis.title=element_text(size=18),
+               title=element_text(size=18), 
+               panel.grid = element_blank(), 
+               panel.background = element_rect(fill = "transparent", linewidth=0.5),aspect.ratio=1)
+
+plot4
+
+ggsave(paste0(Sys.Date(), "LG_PCA_by_sex_PC5_6_subset.pdf"),plot4, height=12, width=12.5,unit="cm" )
+```
+
+
